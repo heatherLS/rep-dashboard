@@ -15,10 +15,8 @@ tab1, tab2, tab3 = st.tabs(["🏆 Leaderboard", "🧮 Calculator", "Bonus & Hist
 # ---- Shared Config ----
 sheet_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=171451260"
 
-@st.cache_data
 def load_data():
-    df = pd.read_csv(sheet_url, header=1)
-    return df
+    return pd.read_csv(sheet_url, header=1)
 
 with tab1:
     st.markdown("<h1 style='text-align: center;'>📈 Conversion Rate Leaderboard</h1>", unsafe_allow_html=True)
