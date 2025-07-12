@@ -10,7 +10,7 @@ st.title("🌟 Sales Rep Performance Dashboard")
 # 🔁 Auto-refresh every 60 seconds (60000 ms)
 st_autorefresh(interval=60000, key="datarefresh")
 
-tab1, tab2, tab3 = st.tabs(["🏆 Leaderboard", "🧮 Calculator", "Bonus & History"])
+tab1, tab2, tab3 = st.tabs(["🏏 Leaderboard", "🧶 Calculator", "Bonus & History"])
 
 # ---- Shared Config ----
 sheet_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=171451260"
@@ -19,9 +19,9 @@ def load_data():
     return pd.read_csv(sheet_url, header=1)
 
 with tab1:
-    st.markdown("<h1 style='text-align: center;'>📈 Conversion Rate Leaderboard</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center;'>📊 Conversion Rate Leaderboard</h1>", unsafe_allow_html=True)
     df = load_data()
-    
+
     # 🎂 Birthday & Anniversary shoutouts
     today = datetime.now()
 
@@ -29,7 +29,7 @@ with tab1:
         df['Birthday'] = pd.to_datetime(df['Birthday'], errors='coerce')
         bdays_today = df[df['Birthday'].dt.strftime('%m-%d') == today.strftime('%m-%d')]
         for _, row in bdays_today.iterrows():
-            st.markdown(f"<div style='text-align: center; color: orange; font-size: 20px;'>🧁🎉 Happy Birthday, {row['First_Name']}! 🎉🧁</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='text-align: center; color: orange; font-size: 20px;'>🌼🎉 Happy Birthday, {row['First_Name']}! 🎉🌼</div>", unsafe_allow_html=True)
 
     if 'Start Date' in df.columns:
         df['Start Date'] = pd.to_datetime(df['Start Date'], errors='coerce')
@@ -38,11 +38,12 @@ with tab1:
             years = today.year - row['Start Date'].year
             st.markdown(f"<div style='text-align: center; color: teal; font-size: 20px;'>🥳🎉 Happy {years}-year Anniversary, {row['First_Name']}! 🎉🥳</div>", unsafe_allow_html=True)
 
+    # ✅ Convert Calls to numeric and keep everyone for rep selection
     df['Calls'] = pd.to_numeric(df['Calls'], errors='coerce').fillna(0)
-    df = df[df['Calls'] >= 1]
 
     rep_col = 'Rep'
     conversion_col = 'Conversion'
+
 
     df['First_Name'] = df['First_Name'].astype(str).str.strip()
     df['Last_Name'] = df['Last_Name'].astype(str).str.strip()
@@ -52,13 +53,30 @@ with tab1:
     double_digit_celebs = df[df['Wins'] >= 10]
     if not double_digit_celebs.empty:
         names = ", ".join(double_digit_celebs['First_Name'].tolist())
-        st.markdown(f"<div style='text-align: center; color: purple; font-size: 22px; font-weight: bold;'>🎉 DOUBLE DIGITS CLUB: {names} {'has' if len(double_digit_celebs)==1 else 'have'} crushed 10+ wins today!</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='text-align: center; color: purple; font-size: 22px; font-weight: bold;'>🎉 DOUBLE DIGITS CLUB: {names} {'has' if len(double_digit_celebs)==1 else 'have'} crushed 10+ wins today!</div>",
+            unsafe_allow_html=True
+        )
 
     all_reps = sorted(df[rep_col].dropna().unique())
+    all_reps.insert(0, "🔍 Select your name")
     user = st.selectbox("👤 Who's using this app right now?", all_reps, key="selected_rep")
 
+    if user == "🔍 Select your name":
+        st.warning("Please select your name from the list to continue.")
+        st.stop()
+
+    active_df = df[df['Calls'] >= 1]
     user_data = df[df[rep_col] == user]
     first_name = user_data['First_Name'].values[0] if not user_data.empty else "Rep"
+
+
+
+
+    # 👀 If user has 0 calls today, show message
+    user_calls = user_data['Calls'].sum() if not user_data.empty else 0
+    if user_calls == 0:
+        st.warning("📞 No calls logged for you today yet! Let’s change that. 💪")
 
     try:
         personal_conversion = float(user_data[conversion_col].astype(str).str.replace('%', '').str.strip().values[0]) if not user_data.empty else 0.0
@@ -67,6 +85,42 @@ with tab1:
 
     st.markdown("<h2 style='text-align: center;'>📊 Your Conversion Rate</h2>", unsafe_allow_html=True)
     st.markdown(f"<h3 style='text-align: center;'>{personal_conversion:.2f}%</h3>", unsafe_allow_html=True)
+
+    # 🌝 Motivational Blurb
+    if personal_conversion >= 26:
+        st.success("🌟 Steve Green Level! You're an elite closer!")
+        st.balloons()
+    elif personal_conversion >= 23:
+        st.success("🚀 Super Duper Green! You're on fire!")
+    elif personal_conversion >= 21:
+        st.info("🌿 Super Green! You're doing awesome!")
+    elif personal_conversion >= 20:
+        st.info("📈 Green Zone! Keep pushing and you'll level up!")
+    elif personal_conversion >= 19:
+        st.warning("🚫 Almost There! Just 1% more for payout.")
+    else:
+        st.error("❌ Below Base. Let’s lock in and close the gap!")
+
+    # 🍃 LT Motivation if none sold
+    if 'Lawn Treatment' in user_data.columns and not user_data.empty:
+        user_lt = pd.to_numeric(user_data['Lawn Treatment'], errors='coerce').fillna(0).values[0]
+        if user_lt == 0:
+            st.warning("🍃 You haven’t landed any Lawn Treatments today... Just one gets you in the race for bonus pay!")
+
+    # 🔥 Win Streak + Motivation
+    user_wins = user_data['Wins'].values[0] if not user_data.empty else 0
+
+    if user_wins >= 7:
+        st.markdown(f"<div style='text-align: center; font-size: 20px; color: red;'>🔥 {user_wins}-Win Streak! You're on fire!</div>", unsafe_allow_html=True)
+
+    if user_wins < 10:
+        remaining = 10 - user_wins
+        if remaining > 0:
+            st.markdown(f"<div style='text-align: center; font-size: 18px; color: orange;'>💡 Just {remaining} more to join the Double Digits Club!</div>", unsafe_allow_html=True)
+    
+
+
+    # 🧑‍🤝‍🧑 Top Team Section — continue from here...
 
     # 👥 Top Team
 if 'Team Name' in df.columns:
@@ -99,10 +153,10 @@ if 'Team Name' in df.columns:
 
 
 
-    # 🏅 Top 3 Reps
-    df[conversion_col] = df[conversion_col].astype(str).str.replace('%', '').str.strip()
-    df[conversion_col] = pd.to_numeric(df[conversion_col], errors='coerce').fillna(0)
-    leaderboard = df[['Full_Name', conversion_col]].sort_values(by=conversion_col, ascending=False).reset_index(drop=True)
+   # 🏊 Top 3 Reps
+    active_df[conversion_col] = active_df[conversion_col].astype(str).str.replace('%', '').str.strip()
+    active_df[conversion_col] = pd.to_numeric(active_df[conversion_col], errors='coerce').fillna(0)
+    leaderboard = active_df[['Full_Name', conversion_col]].sort_values(by=conversion_col, ascending=False).reset_index(drop=True)
     leaderboard['Rank'] = leaderboard.index + 1
 
     st.markdown("<h2 style='text-align: center;'>🏅 Top 3 Reps</h2>", unsafe_allow_html=True)
@@ -165,6 +219,7 @@ if 'Team Name' in df.columns:
         lt_leaderboard['Rank'] = lt_leaderboard.index + 1
         medals = ['🥇', '🥈', '🥉']
 
+
         st.markdown("<h2 style='text-align: center;'>🍃 Top 3 Lawn Treatment Sellers</h2>", unsafe_allow_html=True)
         for i, row in lt_leaderboard.head(3).iterrows():
             logo_img = row['Team_Logo']
@@ -184,6 +239,31 @@ if 'Team Name' in df.columns:
             unsafe_allow_html=True
         )
 
+        # Function to generate top 3 leaderboard for a service
+        def show_service_leaderboard(df, column_name, emoji, title):
+            if column_name in df.columns:
+                df[column_name] = pd.to_numeric(df[column_name], errors='coerce').fillna(0)
+                leaderboard = df[['Full_Name', column_name, 'Team_Logo']].sort_values(by=column_name, ascending=False).reset_index(drop=True)
+                leaderboard['Rank'] = leaderboard.index + 1
+                medals = ['🥇', '🥈', '🥉']
+
+                st.markdown(f"<h2 style='text-align: center;'>{emoji} Top 3 {title}</h2>", unsafe_allow_html=True)
+                for i, row in leaderboard.head(3).iterrows():
+                    logo_img = row['Team_Logo']
+                    medal = medals[i] if i < len(medals) else ''
+                    st.markdown(f"""
+                        <div style='text-align: center; font-size: 24px; font-weight: bold;'>
+                            {medal} {row['Full_Name']} {logo_img} — {int(row[column_name])} {title}
+                        </div>
+                    """, unsafe_allow_html=True)
+
+        # Show additional service leaderboards
+        lt_active_df = df[df['Calls'] >= 1].copy()
+        show_service_leaderboard(lt_active_df, 'Bush Trimming', '🌳', 'Bush Trimming')
+        show_service_leaderboard(lt_active_df, 'Flower Bed Weeding', '🌸', 'Flower Bed Weeding')
+        show_service_leaderboard(lt_active_df, 'Mosquito', '🦟', 'Mosquito')
+
+        # Style for the leaderboard tables
         st.markdown("""
         <style>
         table td:first-child, table th:first-child {
@@ -196,6 +276,7 @@ if 'Team Name' in df.columns:
         }
         </style>
         """, unsafe_allow_html=True)
+       
 
 
 
