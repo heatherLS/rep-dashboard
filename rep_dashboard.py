@@ -432,21 +432,27 @@ with tab3:
     # 🏅 Personal Bests Section
     st.markdown("### 🏅 Personal Bests")
 
-    # Load personal bests from history sheet (adjust URL or GID if needed)
+    # Load personal bests from history sheet
     history_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=303010891"
     history_df = pd.read_csv(history_url, header=1)  # Start at row 2
     history_df.columns = history_df.columns.str.strip()  # Clean up any spaces in headers
 
+    # Filter all rows for the selected rep
+    rep_history = history_df[history_df['Rep'].astype(str).str.strip() == user]
 
-    # Filter by selected rep
-    rep_history = history_df[history_df['Rep'].astype(str).str.strip() == row['Rep']]
+    # Safely convert all relevant columns to numeric
+    rep_history['Wins'] = pd.to_numeric(rep_history['Wins'], errors='coerce').fillna(0)
+    rep_history['Lawn Treatment'] = pd.to_numeric(rep_history['Lawn Treatment'], errors='coerce').fillna(0)
+    rep_history['Bush Trimming'] = pd.to_numeric(rep_history.get('Bush Trimming', 0), errors='coerce').fillna(0)
+    rep_history['Flower Bed Weeding'] = pd.to_numeric(rep_history.get('Flower Bed Weeding', 0), errors='coerce').fillna(0)
+    rep_history['Mosquito'] = pd.to_numeric(rep_history.get('Mosquito', 0), errors='coerce').fillna(0)
 
-    # Compute personal bests
+    # Compute personal bests across all days
     pb_wins = rep_history['Wins'].max()
     pb_lawn = rep_history['Lawn Treatment'].max()
-    pb_bush = rep_history['Bush Trimming'].max() if 'Bush Trimming' in rep_history.columns else 0
-    pb_flower = rep_history['Flower Bed Weeding'].max() if 'Flower Bed Weeding' in rep_history.columns else 0
-    pb_mosquito = rep_history['Mosquito'].max() if 'Mosquito' in rep_history.columns else 0
+    pb_bush = rep_history['Bush Trimming'].max()
+    pb_flower = rep_history['Flower Bed Weeding'].max()
+    pb_mosquito = rep_history['Mosquito'].max()
 
     # Personal Best Challenge Formatter
     def challenge_line(label, pb_val, emoji):
@@ -454,6 +460,7 @@ with tab3:
             return f"{emoji} **{label} PB:** 0 — Let’s set a new record today! 💪"
         else:
             return f"{emoji} **{label} PB:** {int(pb_val)} — Can you hit {int(pb_val) + 1} today?"
+
 
     # Display all
     st.markdown(f"""
