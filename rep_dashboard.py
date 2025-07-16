@@ -4,7 +4,7 @@ import math
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
-st.set_page_config(page_title="Rep Dashboard", layout="centered")
+st.set_page_config(page_title="Rep Dashboard", layout="wide")
 st.title("🌟 Sales Rep Performance Dashboard")
 
 # 🔁 Auto-refresh every 60 seconds (60000 ms)
@@ -71,7 +71,7 @@ with tab1:
     first_name = user_data['First_Name'].values[0] if not user_data.empty else "Rep"
 
 
-
+    
 
     # 👀 If user has 0 calls today, show message
     user_calls = user_data['Calls'].sum() if not user_data.empty else 0
@@ -118,7 +118,23 @@ with tab1:
         if remaining > 0:
             st.markdown(f"<div style='text-align: center; font-size: 18px; color: orange;'>💡 Just {remaining} more to join the Double Digits Club!</div>", unsafe_allow_html=True)
     
+    # Function to generate top 3 leaderboard for a service
+def show_service_leaderboard(df, column_name, emoji, title):
+    if column_name in df.columns:
+        df[column_name] = pd.to_numeric(df[column_name], errors='coerce').fillna(0)
+        leaderboard = df[['Full_Name', column_name, 'Team_Logo']].sort_values(by=column_name, ascending=False).reset_index(drop=True)
+        leaderboard['Rank'] = leaderboard.index + 1
+        medals = ['🥇', '🥈', '🥉']
 
+        st.markdown(f"<h2 style='text-align: center;'>{emoji} Top 3 {title}</h2>", unsafe_allow_html=True)
+        for i, row in leaderboard.head(3).iterrows():
+            logo_img = row['Team_Logo']
+            medal = medals[i] if i < len(medals) else ''
+            st.markdown(f"""
+                <div style='text-align: center; font-size: 24px; font-weight: bold;'>
+                    {medal} {row['Full_Name']} {logo_img} — {int(row[column_name])} {title}
+                </div>
+            """, unsafe_allow_html=True)
 
     # 🧑‍🤝‍🧑 Top Team Section — continue from here...
 
@@ -206,77 +222,68 @@ if 'Team Name' in df.columns:
         </style>
         """, unsafe_allow_html=True)
 
+# Show additional service leaderboards side-by-side
+col1, col2, col3, col4 = st.columns(4)
 
-    # 🍃 LT Leaderboard
-    if 'Lawn Treatment' in df.columns:
-        df['Lawn Treatment'] = pd.to_numeric(df['Lawn Treatment'], errors='coerce').fillna(0)
-        if 'Team_Logo' not in df.columns:
-            df['Team_Logo'] = df['Team Name'].astype(str).apply(
-                lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='30'>" if pd.notna(name) else ""
-            )
+with col1:
+    show_service_leaderboard(df[df['Calls'] >= 1], 'Lawn Treatment', '🍃', 'Lawn Treatment')
 
-        lt_leaderboard = df[['Full_Name', 'Lawn Treatment', 'Team_Logo']].sort_values(by='Lawn Treatment', ascending=False).reset_index(drop=True)
-        lt_leaderboard['Rank'] = lt_leaderboard.index + 1
-        medals = ['🥇', '🥈', '🥉']
+with col2:
+    show_service_leaderboard(df[df['Calls'] >= 1], 'Bush Trimming', '🌳', 'Bush Trim')
+
+with col3:
+    show_service_leaderboard(df[df['Calls'] >= 1], 'Mosquito', '🦟', 'Mosquito')
+
+with col4:
+    show_service_leaderboard(df[df['Calls'] >= 1], 'Flower Bed Weeding', '🌸', 'Flower Bed Weeding')
 
 
-        st.markdown("<h2 style='text-align: center;'>🍃 Top 3 Lawn Treatment Sellers</h2>", unsafe_allow_html=True)
-        for i, row in lt_leaderboard.head(3).iterrows():
-            logo_img = row['Team_Logo']
-            medal = medals[i] if i < len(medals) else ''
-            st.markdown(f"""
-                <div style='text-align: center; font-size: 24px; font-weight: bold;'>
-                    {medal} {row['Full_Name']} {logo_img} — {int(row['Lawn Treatment'])} LT
-                </div>
-            """, unsafe_allow_html=True)
+# 🍃 Full LT Leaderboard with additional services
+if 'Lawn Treatment' in df.columns:
+    df['Lawn Treatment'] = pd.to_numeric(df['Lawn Treatment'], errors='coerce').fillna(0)
+    df['Bush Trimming'] = pd.to_numeric(df.get('Bush Trimming', 0), errors='coerce').fillna(0)
+    df['Mosquito'] = pd.to_numeric(df.get('Mosquito', 0), errors='coerce').fillna(0)
+    df['Flower Bed Weeding'] = pd.to_numeric(df.get('Flower Bed Weeding', 0), errors='coerce').fillna(0)
 
-        st.markdown("<h2 style='text-align: center;'>🍃 Full LT Leaderboard</h2>", unsafe_allow_html=True)
-        lt_display = lt_leaderboard[['Rank', 'Full_Name', 'Lawn Treatment', 'Team_Logo']]
-        lt_display.columns = ['Rank', 'Rep Name', 'Lawn Treatment', 'Team Logo']
-
-        st.write(
-            lt_display.to_html(escape=False, index=False),
-            unsafe_allow_html=True
+    if 'Team_Logo' not in df.columns:
+        df['Team_Logo'] = df['Team Name'].astype(str).apply(
+            lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='30'>" if pd.notna(name) else ""
         )
 
-        # Function to generate top 3 leaderboard for a service
-        def show_service_leaderboard(df, column_name, emoji, title):
-            if column_name in df.columns:
-                df[column_name] = pd.to_numeric(df[column_name], errors='coerce').fillna(0)
-                leaderboard = df[['Full_Name', column_name, 'Team_Logo']].sort_values(by=column_name, ascending=False).reset_index(drop=True)
-                leaderboard['Rank'] = leaderboard.index + 1
-                medals = ['🥇', '🥈', '🥉']
+    lt_leaderboard = df[df['Calls'] >= 1].copy()
+    lt_leaderboard = lt_leaderboard.sort_values(by='Lawn Treatment', ascending=False).reset_index(drop=True)
+    lt_leaderboard['Rank'] = lt_leaderboard.index + 1
 
-                st.markdown(f"<h2 style='text-align: center;'>{emoji} Top 3 {title}</h2>", unsafe_allow_html=True)
-                for i, row in leaderboard.head(3).iterrows():
-                    logo_img = row['Team_Logo']
-                    medal = medals[i] if i < len(medals) else ''
-                    st.markdown(f"""
-                        <div style='text-align: center; font-size: 24px; font-weight: bold;'>
-                            {medal} {row['Full_Name']} {logo_img} — {int(row[column_name])} {title}
-                        </div>
-                    """, unsafe_allow_html=True)
+    # Select and rename columns for display
+    lt_display = lt_leaderboard[['Rank', 'Full_Name', 'Lawn Treatment', 'Bush Trimming', 'Mosquito', 'Flower Bed Weeding', 'Team_Logo']]
+    lt_display.columns = ['Rank', 'Rep Name', 'Lawn Treatment', 'Bush Trimming', 'Mosquito', 'Flower Bed Weeding', 'Team Logo']
 
-        # Show additional service leaderboards
-        lt_active_df = df[df['Calls'] >= 1].copy()
-        show_service_leaderboard(lt_active_df, 'Bush Trimming', '🌳', 'Bush Trimming')
-        show_service_leaderboard(lt_active_df, 'Flower Bed Weeding', '🌸', 'Flower Bed Weeding')
-        show_service_leaderboard(lt_active_df, 'Mosquito', '🦟', 'Mosquito')
+    st.markdown("<h2 style='text-align: center;'>🍃 Full LT Leaderboard</h2>", unsafe_allow_html=True)
+    st.markdown(lt_display.to_html(escape=False, index=False), unsafe_allow_html=True)
 
-        # Style for the leaderboard tables
-        st.markdown("""
-        <style>
-        table td:first-child, table th:first-child {
-            text-align: center !important;
-        }
-        table {
-            margin-left: auto;
-            margin-right: auto;
-            width: 100%;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-       
+
+    # Center the table visually
+    st.markdown("""
+    <style>
+    table td, table th {
+        text-align: center !important;
+        vertical-align: middle;
+    }
+    table {
+        margin-left: auto;
+        margin-right: auto;
+        border-collapse: collapse;
+        width: 90%;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+    th {
+    background-color: #333;
+    color: white;
+    font-weight: bold;
+}
+
+    </style>
+    """, unsafe_allow_html=True)
 
 
 
