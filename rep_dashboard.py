@@ -3,6 +3,9 @@ import pandas as pd
 import math
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
+import streamlit.components.v1 as components
+from datetime import datetime, timedelta
+
 
 st.set_page_config(page_title="Rep Dashboard", layout="wide")
 st.title("🌟 Sales Rep Performance Dashboard")
@@ -10,10 +13,16 @@ st.title("🌟 Sales Rep Performance Dashboard")
 # 🔁 Auto-refresh every 60 seconds (60000 ms)
 st_autorefresh(interval=60000, key="datarefresh")
 
-tab1, tab2, tab3 = st.tabs(["🏏 Leaderboard", "🧶 Calculator", "Bonus & History"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Leaderboard", "🧮 Calculator", "💰Bonus & History", "📅 Yesterday"])
 
 # ---- Shared Config ----
 sheet_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=171451260"
+
+history_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=303010891"
+@st.cache_data(ttl=86400)  # cache for 24 hours (86400 seconds)
+def load_history():
+    return pd.read_csv(history_url, header=1)
+
 
 def load_data():
     return pd.read_csv(sheet_url, header=1)
@@ -70,7 +79,93 @@ with tab1:
     user_data = df[df[rep_col] == user]
     first_name = user_data['First_Name'].values[0] if not user_data.empty else "Rep"
 
+with tab1:
+    # Your current leaderboard, shoutouts, and top 3 service blocks here...
 
+    selected_rep = st.session_state.get("selected_rep", None)
+
+    # Clean up percent columns safely
+    percent_columns = ['Conversion', 'All-In Attach', 'Lawn Treatment Attach']
+    for col in percent_columns:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.replace('%', '').str.strip()
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+
+    selected_rep = st.session_state.get("selected_rep", None)
+
+    if selected_rep:
+        match = df[df['Rep'] == selected_rep]
+    
+        if not match.empty:
+            rep_row = match.iloc[0]
+            team_name = rep_row.get("Team Name", "Unknown")
+
+        # 🧢 Team logo
+        team_logo = f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{team_name.replace(' ', '_').lower()}.png' width='80'>" if pd.notna(team_name) else ""
+
+        # ✅ Correctly calculate conversion and team rank
+        team_stats = df[df['Calls'] > 0].copy()
+        team_stats['Calls'] = pd.to_numeric(team_stats['Calls'], errors='coerce')
+        team_stats['Wins'] = pd.to_numeric(team_stats['Wins'], errors='coerce')
+
+        team_totals = team_stats.groupby("Team Name").agg(
+            Total_Calls=("Calls", "sum"),
+            Total_Wins=("Wins", "sum")
+        ).reset_index()
+
+        team_totals['Conversion'] = (team_totals['Total_Wins'] / team_totals['Total_Calls']) * 100
+        team_totals['Rank'] = team_totals['Conversion'].rank(ascending=False, method='min').astype(int)
+
+        if team_name in team_totals['Team Name'].values:
+            team_rank = int(team_totals.loc[team_totals['Team Name'] == team_name, 'Rank'].values[0])
+        else:
+            team_rank = "N/A"
+
+
+        # 🖼️ Display logo and rank
+        st.markdown(f"""
+        <div style='text-align: center;'>
+            {team_logo}<br>
+            <div style='font-size: 18px; color: #00cccc;'>🏅 Team Rank: {team_rank}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # 📊 Team stats
+        team_df = df[df['Team Name'] == team_name].copy()
+        team_df['Conversion'] = pd.to_numeric(team_df['Conversion'], errors='coerce')
+        team_df['All-In Attach'] = pd.to_numeric(team_df['All-In Attach'], errors='coerce')
+        team_df['Lawn Treatment'] = pd.to_numeric(team_df['Lawn Treatment'], errors='coerce')
+
+        team_total_calls = team_df['Calls'].sum()
+        team_total_wins = team_df['Wins'].sum()
+        team_conversion_rate = (team_total_wins / team_total_calls) * 100 if team_total_calls > 0 else 0
+
+        attach_services = ['Lawn Treatment', 'Leaf Removal', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']
+        for svc in attach_services:
+            team_df[svc] = pd.to_numeric(team_df.get(svc, 0), errors='coerce').fillna(0)
+
+        team_total_attaches = team_df[attach_services].sum(axis=1).sum()
+        team_attach_rate = (team_total_attaches / team_total_wins) * 100 if team_total_wins > 0 else 0
+
+        team_lawn_treatment = team_df['Lawn Treatment'].sum()
+        team_lt_attach = (team_lawn_treatment / team_total_wins) * 100 if team_total_wins > 0 else 0
+
+
+        st.markdown(f"""
+        <div style='text-align: center; font-size: 18px; margin-top: 10px;'>
+            <b>{team_name} Team Averages:</b><br>
+            🧮 Conversion: {team_conversion_rate:.2f}%<br>
+            🧩 All-In Attach: {team_attach_rate:.2f}%<br>
+            🍃 Lawn Treatment Attach: {team_lt_attach:.2f}%
+
+        </div>
+        """, unsafe_allow_html=True)
+
+    else:
+        st.warning("Selected rep not found in the dataset.")
+
+    # Now continue on to show personal performance metrics
     
 
     # 👀 If user has 0 calls today, show message
@@ -82,6 +177,8 @@ with tab1:
         personal_conversion = float(user_data[conversion_col].astype(str).str.replace('%', '').str.strip().values[0]) if not user_data.empty else 0.0
     except:
         personal_conversion = 0.0
+
+
 
     st.markdown("<h2 style='text-align: center;'>📊 Your Conversion Rate</h2>", unsafe_allow_html=True)
     st.markdown(f"<h3 style='text-align: center;'>{personal_conversion:.2f}%</h3>", unsafe_allow_html=True)
@@ -107,6 +204,9 @@ with tab1:
         if user_lt == 0:
             st.warning("🍃 You haven’t landed any Lawn Treatments today... Just one gets you in the race for bonus pay!")
 
+
+
+
     # 🔥 Win Streak + Motivation
     user_wins = user_data['Wins'].values[0] if not user_data.empty else 0
 
@@ -118,23 +218,62 @@ with tab1:
         if remaining > 0:
             st.markdown(f"<div style='text-align: center; font-size: 18px; color: orange;'>💡 Just {remaining} more to join the Double Digits Club!</div>", unsafe_allow_html=True)
     
-    # Function to generate top 3 leaderboard for a service
-def show_service_leaderboard(df, column_name, emoji, title):
-    if column_name in df.columns:
-        df[column_name] = pd.to_numeric(df[column_name], errors='coerce').fillna(0)
-        leaderboard = df[['Full_Name', column_name, 'Team_Logo']].sort_values(by=column_name, ascending=False).reset_index(drop=True)
-        leaderboard['Rank'] = leaderboard.index + 1
-        medals = ['🥇', '🥈', '🥉']
+# 🎯 Conversion Milestones (Centered and Readable)
+st.markdown("<h3 style='text-align:center; color:#ffffff;'>🎯 Conversion Milestones</h3>", unsafe_allow_html=True)
 
-        st.markdown(f"<h2 style='text-align: center;'>{emoji} Top 3 {title}</h2>", unsafe_allow_html=True)
-        for i, row in leaderboard.head(3).iterrows():
-            logo_img = row['Team_Logo']
-            medal = medals[i] if i < len(medals) else ''
-            st.markdown(f"""
-                <div style='text-align: center; font-size: 24px; font-weight: bold;'>
-                    {medal} {row['Full_Name']} {logo_img} — {int(row[column_name])} {title}
-                </div>
-            """, unsafe_allow_html=True)
+conversion_targets = [19, 20, 21, 23, 26]
+call_count = int(user_calls)
+win_count = int(user_wins)
+
+rows = []
+for target in conversion_targets:
+    needed_wins = math.ceil((target / 100) * call_count)
+    remaining = max(0, needed_wins - win_count)
+    hit = remaining == 0
+
+    status = "✅ Hit!" if hit else f"🎯 {remaining} more win(s)"
+    rows.append(f"{target}% → Need {needed_wins} wins ({status})")
+
+st.markdown(
+    "<div style='text-align:center; font-size: 16px; line-height: 1.8; font-weight: 500; color: #f8f8f8;'>"
+    + "<br>".join(rows) +
+    "</div>",
+    unsafe_allow_html=True
+)
+
+
+
+def show_service_leaderboard(df, column_name, emoji, title):
+    if column_name not in df.columns:
+        return
+
+    df[column_name] = pd.to_numeric(df[column_name], errors='coerce').fillna(0)
+    leaderboard = (
+        df[['Full_Name', column_name, 'Team_Logo']]
+        .sort_values(by=column_name, ascending=False)
+        .reset_index(drop=True)
+    )
+    leaderboard['Rank'] = leaderboard.index + 1
+
+    # ←—— ADD THIS: if the top‑3 are all zero, just skip rendering
+    if leaderboard.head(3)[column_name].sum() == 0:
+        return
+
+    medals = ['🥇', '🥈', '🥉']
+
+    st.markdown(
+        f"<h3 style='text-align: center; font-size:20px;'>{emoji} Top 3 {title}</h3>",
+        unsafe_allow_html=True
+    )
+    for i, row in leaderboard.head(3).iterrows():
+        logo_img = row['Team_Logo']
+        medal   = medals[i] if i < len(medals) else ''
+        st.markdown(f"""
+            <div style='text-align: center; font-size: 16px; font-weight: bold;'>
+                {medal} {logo_img} {row['Full_Name']} — {int(row[column_name])}
+            </div>
+        """, unsafe_allow_html=True)
+
 
     # 🧑‍🤝‍🧑 Top Team Section — continue from here...
 
@@ -145,27 +284,108 @@ if 'Team Name' in df.columns:
     df_team['Calls'] = pd.to_numeric(df_team['Calls'], errors='coerce').replace(0, pd.NA)
     df_team = df_team.dropna(subset=['Calls'])
 
-    team_stats = df_team.groupby('Team Name').agg(
-        Total_Calls=('Calls', 'sum'),
-        Total_Wins=('Wins', 'sum')
-    ).reset_index()
-    team_stats['Conversion'] = (team_stats['Total_Wins'] / team_stats['Total_Calls']) * 100
-    team_stats = team_stats.sort_values(by='Conversion', ascending=False)
+    # ✅ Properly calculate team totals and conversion rank
+    team_stats = df[df['Calls'] > 0].copy()
+    team_stats['Calls'] = pd.to_numeric(team_stats['Calls'], errors='coerce')
+    team_stats['Wins'] = pd.to_numeric(team_stats['Wins'], errors='coerce')
 
-    if not team_stats.empty:
+    team_totals = team_stats.groupby("Team Name").agg(
+        Total_Calls=("Calls", "sum"),
+        Total_Wins=("Wins", "sum")
+    ).reset_index()
+
+    team_totals['Conversion'] = (team_totals['Total_Wins'] / team_totals['Total_Calls']) * 100
+    team_totals['Rank'] = team_totals['Conversion'].rank(ascending=False, method='min').astype(int)
+
+    # 🎖️ Display Top 3 Teams (Side by Side)
+    if not team_totals.empty:
         st.markdown("<h2 style='text-align: center;'>👥 Top 3 Teams</h2>", unsafe_allow_html=True)
-        medals = ['🥇', '🥈', '🥉']
-        for i, (_, team_row) in enumerate(team_stats.head(3).iterrows()):
-            medal = medals[i] if i < len(medals) else ''
-            logo_filename = team_row['Team Name'].replace(' ', '_').lower() + '.png'
-            logo_url = f"https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{logo_filename}"
-            st.markdown(f"""
-                <div style="text-align: center; font-size: 22px; font-weight: bold;">
-                    {medal} {team_row['Team Name']}<br>
-                    <img src="{logo_url}" width="90"><br>
-                    {team_row['Conversion']:.2f}% — {int(team_row['Total_Wins'])} wins / {int(team_row['Total_Calls'])} calls
-                </div><br>
-            """, unsafe_allow_html=True)
+        medals = ['🥇 1st Place', '🥈 2nd Place', '🥉 3rd Place']
+        cols = st.columns(3)
+    
+        top_3 = team_totals.sort_values(by="Conversion", ascending=False).head(3)
+    
+        for i, (_, team_row) in enumerate(top_3.iterrows()):
+            with cols[i]:
+                logo_filename = team_row['Team Name'].replace(' ', '_').lower() + '.png'
+                logo_url = f"https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{logo_filename}"
+            
+                st.markdown(f"""
+                    <div style='text-align: center; font-size: 18px; font-weight: bold;'>
+                        {medals[i]}<br>
+                        {team_row['Team Name']}<br>
+                        <img src="{logo_url}" width="80"><br><br>
+                        <span style='font-size: 16px;'>
+                            {team_row['Conversion']:.2f}%<br>
+                            {int(team_row['Total_Wins'])} wins / {int(team_row['Total_Calls'])} calls
+                        </span>
+                    </div>
+                """, unsafe_allow_html=True)
+
+
+
+    # 🥇 Get top team stats
+    top_team_row = team_totals.sort_values(by="Conversion", ascending=False).iloc[0]
+    top_team_name = top_team_row['Team Name']
+    top_team_wins = top_team_row['Total_Wins']
+    top_team_attaches = df[df['Team Name'] == top_team_name][['Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']].sum().sum()
+    top_team_lt = df[df['Team Name'] == top_team_name]['Lawn Treatment'].sum()
+
+    # 🧮 Your team stats (already defined as team_name)
+    your_team_wins = team_totals.loc[team_totals['Team Name'] == team_name, 'Total_Wins'].values[0]
+    your_team_attaches = df[df['Team Name'] == team_name][['Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']].sum().sum()
+    your_team_lt = df[df['Team Name'] == team_name]['Lawn Treatment'].sum()
+
+    # 📈 Calculate required additional wins to beat top team's conversion rate
+    top_team = team_totals.sort_values(by="Conversion", ascending=False).iloc[0]
+    your_team_row_df = team_totals[team_totals["Team Name"] == team_name]
+
+    # 📈 Your team info
+your_team_row_df = team_totals[team_totals["Team Name"] == team_name]
+
+if not your_team_row_df.empty:
+    your_team_row = your_team_row_df.iloc[0]
+
+    if team_name == top_team["Team Name"]:
+        # 🎉 Your team is already #1!
+        st.markdown(f"""
+        <div style='text-align: center; font-size: 20px; margin-top: 10px; padding: 12px; border-radius: 10px;
+                    background-color: rgba(0, 128, 0, 0.1); color: #d1ffd1; border: 2px solid #0f0;'>
+            🎉 <b>Congrats, {team_name} is currently the top team!</b><br>
+            Keep crushing it to stay on top! 💪🔥
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        # Calculate how many more wins your team needs to take the top spot
+        your_wins = your_team_row["Total_Wins"]
+        your_calls = your_team_row["Total_Calls"]
+        top_conversion_rate = top_team["Conversion"] / 100
+
+        denominator = 1 - top_conversion_rate
+        if denominator <= 0:
+            needed_wins = 0
+        else:
+            needed_wins = max(0, math.ceil((top_conversion_rate * your_calls - your_wins) / denominator))
+
+        # 📉 Calculate attaches and LT
+        needed_attaches = max(0, int(top_team_attaches - your_team_attaches))
+        needed_lt = max(0, int(top_team_lt - your_team_lt))
+
+        st.markdown(f"""
+        <div style='text-align: center; font-size: 18px; margin-top: 10px; padding: 10px; border-radius: 8px;
+                    background-color: rgba(255, 255, 255, 0.05); color: #f9f9f9; border: 1px solid #444;'>
+            <b>Can your team take the top spot?</b><br><br>
+            🏆 Top Team: <b>{top_team["Team Name"]}</b><br>
+            💪 Your Team: <b>{team_name}</b><br><br>
+            Your team needs:<br>
+            • <b>{needed_wins} more wins</b><br>
+            • <b>{needed_attaches} more attaches</b><br>
+            • <b>{needed_lt} more Lawn Treatments</b><br>
+            to surpass the top team.
+        </div>
+        """, unsafe_allow_html=True)
+
+
 
 
 
@@ -223,10 +443,10 @@ if 'Team Name' in df.columns:
         """, unsafe_allow_html=True)
 
 # Show additional service leaderboards side-by-side
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
-    show_service_leaderboard(df[df['Calls'] >= 1], 'Lawn Treatment', '🍃', 'Lawn Treatment')
+    show_service_leaderboard(df[df['Calls'] >= 1], 'Lawn Treatment', '🌱', 'Lawn Treatment')
 
 with col2:
     show_service_leaderboard(df[df['Calls'] >= 1], 'Bush Trimming', '🌳', 'Bush Trim')
@@ -237,6 +457,8 @@ with col3:
 with col4:
     show_service_leaderboard(df[df['Calls'] >= 1], 'Flower Bed Weeding', '🌸', 'Flower Bed Weeding')
 
+with col5:
+    show_service_leaderboard(df[df['Calls'] >= 1], 'Leaf Removal', '🍂', 'Leaf Removal')
 
 # 🍃 Full LT Leaderboard with additional services
 if 'Lawn Treatment' in df.columns:
@@ -244,6 +466,7 @@ if 'Lawn Treatment' in df.columns:
     df['Bush Trimming'] = pd.to_numeric(df.get('Bush Trimming', 0), errors='coerce').fillna(0)
     df['Mosquito'] = pd.to_numeric(df.get('Mosquito', 0), errors='coerce').fillna(0)
     df['Flower Bed Weeding'] = pd.to_numeric(df.get('Flower Bed Weeding', 0), errors='coerce').fillna(0)
+    df['Leaf Removal'] = pd.to_numeric(df.get('Leaf Removal', 0), errors='coerce').fillna(0)
 
     if 'Team_Logo' not in df.columns:
         df['Team_Logo'] = df['Team Name'].astype(str).apply(
@@ -254,13 +477,18 @@ if 'Lawn Treatment' in df.columns:
     lt_leaderboard = lt_leaderboard.sort_values(by='Lawn Treatment', ascending=False).reset_index(drop=True)
     lt_leaderboard['Rank'] = lt_leaderboard.index + 1
 
+    # Use First and Last Name instead of email
+    lt_leaderboard['Rep Name'] = lt_leaderboard.apply(
+        lambda row: f"{row.get('First Name', '')} {row.get('Last Name', '')}".strip()
+        if row.get('First Name') or row.get('Last Name') else row.get('Rep', 'Unknown'), axis=1
+    )
+
     # Select and rename columns for display
-    lt_display = lt_leaderboard[['Rank', 'Full_Name', 'Lawn Treatment', 'Bush Trimming', 'Mosquito', 'Flower Bed Weeding', 'Team_Logo']]
-    lt_display.columns = ['Rank', 'Rep Name', 'Lawn Treatment', 'Bush Trimming', 'Mosquito', 'Flower Bed Weeding', 'Team Logo']
+    lt_display = lt_leaderboard[['Rank', 'Rep Name', 'Lawn Treatment', 'Bush Trimming', 'Mosquito', 'Flower Bed Weeding', 'Leaf Removal', 'Team_Logo']]
+    lt_display.columns = ['Rank', 'Rep Name', 'Lawn Treatment', 'Bush Trimming', 'Mosquito', 'Flower Bed Weeding', 'Leaf Removal', 'Team Logo']
 
-    st.markdown("<h2 style='text-align: center;'>🍃 Full LT Leaderboard</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center;'>🌱 Full LT Leaderboard</h2>", unsafe_allow_html=True)
     st.markdown(lt_display.to_html(escape=False, index=False), unsafe_allow_html=True)
-
 
     # Center the table visually
     st.markdown("""
@@ -277,14 +505,12 @@ if 'Lawn Treatment' in df.columns:
         box-shadow: 0 2px 6px rgba(0,0,0,0.15);
     }
     th {
-    background-color: #333;
-    color: white;
-    font-weight: bold;
-}
-
+        background-color: #333;
+        color: white;
+        font-weight: bold;
+    }
     </style>
     """, unsafe_allow_html=True)
-
 
 
 # --------------------------------------------
@@ -371,6 +597,46 @@ with tab2:
 # ---------------------------------------------------
 with tab3:
     st.header("🔥 Bonus & History")
+    
+    import random
+    dummy = random.randint(1, 99999)
+    st.markdown(f"<div style='display:none'>{dummy}</div>", unsafe_allow_html=True)
+
+    components.html("""
+    <div id="emoji-container" style="position: relative; height: 1px;"></div>
+
+    <style>
+    .money-emoji {
+        position: absolute;
+        top: 0;
+        font-size: 2rem;
+        animation: drop 4s linear infinite;
+    }
+
+    @keyframes drop {
+        to {
+            transform: translateY(100vh) rotate(360deg);
+            opacity: 0;
+        }
+    }
+    </style>
+
+    <script>
+    const container = document.getElementById("emoji-container");
+    if (container) {
+        for (let i = 0; i < 30; i++) {
+            const emoji = document.createElement("div");
+            emoji.className = "money-emoji";
+            emoji.innerText = "💸";
+            emoji.style.left = Math.random() * 100 + "vw";
+            emoji.style.animationDelay = Math.random() * 2 + "s";
+            emoji.style.fontSize = (Math.random() * 20 + 20) + "px";
+            container.appendChild(emoji);
+        }
+    }
+    </script>
+    """, height=1)
+
 
     # Bonus metric setup
     def get_points(val, tiers):
@@ -494,3 +760,12 @@ with tab3:
 
     chart = pd.DataFrame({"Metric": list(points.keys()), "Points": list(points.values())})
     st.bar_chart(chart.set_index("Metric"))
+
+
+# --------------------------------------------
+# 📅 TAB 4: Yesterday’s Snapshot
+# --------------------------------------------
+with tab4:
+    st.markdown("<h1 style='text-align: center;'>🗓️ Coming SOON: Incorrect below Yesterday's Leaderboard</h1>", unsafe_allow_html=True)
+
+   
