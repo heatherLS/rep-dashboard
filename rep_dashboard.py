@@ -224,71 +224,71 @@ with tab1:
         if remaining > 0:
             st.markdown(f"<div style='text-align: center; font-size: 18px; color: orange;'>💡 Just {remaining} more to join the Double Digits Club!</div>", unsafe_allow_html=True)
     
-# 🎯 Conversion Milestones (Centered and Readable)
-st.markdown("<h3 style='text-align:center; color:#ffffff;'>🎯 Conversion Milestones</h3>", unsafe_allow_html=True)
+    # 🎯 Conversion Milestones (Centered and Readable)
+    st.markdown("<h3 style='text-align:center; color:#ffffff;'>🎯 Conversion Milestones</h3>", unsafe_allow_html=True)
 
-conversion_targets = [19, 20, 21, 23, 26]
-call_count = int(user_calls)
-win_count = int(user_wins)
+    conversion_targets = [19, 20, 21, 23, 26]
+    call_count = int(user_calls)
+    win_count = int(user_wins)
 
-rows = []
-for target in conversion_targets:
-    needed_wins = math.ceil((target / 100) * call_count)
-    remaining = max(0, needed_wins - win_count)
-    hit = remaining == 0
+    rows = []
+    for target in conversion_targets:
+        needed_wins = math.ceil((target / 100) * call_count)
+        remaining = max(0, needed_wins - win_count)
+        hit = remaining == 0
 
-    status = "✅ Hit!" if hit else f"🎯 {remaining} more win(s)"
-    rows.append(f"{target}% → Need {needed_wins} wins ({status})")
-
-st.markdown(
-    "<div style='text-align:center; font-size: 16px; line-height: 1.8; font-weight: 500; color: #f8f8f8;'>"
-    + "<br>".join(rows) +
-    "</div>",
-    unsafe_allow_html=True
-)
-
-
-
-def show_service_leaderboard(df, column_name, emoji, title):
-    if column_name not in df.columns:
-        return
-
-    df[column_name] = pd.to_numeric(df[column_name], errors='coerce').fillna(0)
-    leaderboard = (
-        df[['Full_Name', column_name, 'Team_Logo']]
-        .sort_values(by=column_name, ascending=False)
-        .reset_index(drop=True)
-    )
-    leaderboard['Rank'] = leaderboard.index + 1
-
-    # ←—— ADD THIS: if the top‑3 are all zero, just skip rendering
-    if leaderboard.head(3)[column_name].sum() == 0:
-        return
-
-    medals = ['🥇', '🥈', '🥉']
+        status = "✅ Hit!" if hit else f"🎯 {remaining} more win(s)"
+        rows.append(f"{target}% → Need {needed_wins} wins ({status})")
 
     st.markdown(
-        f"<h3 style='text-align: center; font-size:20px;'>{emoji} Top 3 {title}</h3>",
+        "<div style='text-align:center; font-size: 16px; line-height: 1.8; font-weight: 500; color: #f8f8f8;'>"
+        + "<br>".join(rows) +
+        "</div>",
         unsafe_allow_html=True
     )
-    for i, row in leaderboard.head(3).iterrows():
-        logo_img = row['Team_Logo']
-        medal   = medals[i] if i < len(medals) else ''
-        st.markdown(f"""
-            <div style='text-align: center; font-size: 16px; font-weight: bold;'>
-                {medal} {logo_img} {row['Full_Name']} — {int(row[column_name])}
-            </div>
-        """, unsafe_allow_html=True)
+
+
+
+    def show_service_leaderboard(df, column_name, emoji, title):
+        if column_name not in df.columns:
+            return
+
+        df[column_name] = pd.to_numeric(df[column_name], errors='coerce').fillna(0)
+        leaderboard = (
+            df[['Full_Name', column_name, 'Team_Logo']]
+            .sort_values(by=column_name, ascending=False)
+            .reset_index(drop=True)
+        )
+        leaderboard['Rank'] = leaderboard.index + 1
+
+    # ←—— ADD THIS: if the top‑3 are all zero, just skip rendering
+        if leaderboard.head(3)[column_name].sum() == 0:
+            return
+
+        medals = ['🥇', '🥈', '🥉']
+
+        st.markdown(
+            f"<h3 style='text-align: center; font-size:20px;'>{emoji} Top 3 {title}</h3>",
+            unsafe_allow_html=True
+        )
+        for i, row in leaderboard.head(3).iterrows():
+            logo_img = row['Team_Logo']
+            medal   = medals[i] if i < len(medals) else ''
+            st.markdown(f"""
+                <div style='text-align: center; font-size: 16px; font-weight: bold;'>
+                    {medal} {logo_img} {row['Full_Name']} — {int(row[column_name])}
+                </div>
+            """, unsafe_allow_html=True)
 
 
     # 🧑‍🤝‍🧑 Top Team Section — continue from here...
 
     # 👥 Top Team
-if 'Team Name' in df.columns:
-    df_team = df[df['Wins'].notna() & df['Calls'].notna()].copy()
-    df_team['Wins'] = pd.to_numeric(df_team['Wins'], errors='coerce').fillna(0)
-    df_team['Calls'] = pd.to_numeric(df_team['Calls'], errors='coerce').replace(0, pd.NA)
-    df_team = df_team.dropna(subset=['Calls'])
+    if 'Team Name' in df.columns:
+        df_team = df[df['Wins'].notna() & df['Calls'].notna()].copy()
+        df_team['Wins'] = pd.to_numeric(df_team['Wins'], errors='coerce').fillna(0)
+        df_team['Calls'] = pd.to_numeric(df_team['Calls'], errors='coerce').replace(0, pd.NA)
+        df_team = df_team.dropna(subset=['Calls'])
 
     # ✅ Properly calculate team totals and conversion rank
     team_stats = df[df['Calls'] > 0].copy()
@@ -331,12 +331,12 @@ if 'Team Name' in df.columns:
 
 
    # 🥇 Get top team stats (used internally, not displayed)
-if not team_totals.empty:
-    top_team_row = team_totals.sort_values(by="Conversion", ascending=False).iloc[0]
-    top_team_name = top_team_row['Team Name']
-    top_team_wins = top_team_row['Total_Wins']
-    top_team_attaches = df[df['Team Name'] == top_team_name][['Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']].sum().sum()
-    top_team_lt = df[df['Team Name'] == top_team_name]['Lawn Treatment'].sum()
+    if not team_totals.empty:
+        top_team_row = team_totals.sort_values(by="Conversion", ascending=False).iloc[0]
+        top_team_name = top_team_row['Team Name']
+        top_team_wins = top_team_row['Total_Wins']
+        top_team_attaches = df[df['Team Name'] == top_team_name][['Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']].sum().sum()
+        top_team_lt = df[df['Team Name'] == top_team_name]['Lawn Treatment'].sum()
 
 
 
@@ -364,8 +364,8 @@ if not team_totals.empty:
     # 📈 Your team info
     your_team_row_df = team_totals[team_totals["Team Name"] == team_name]
 
-if not your_team_row_df.empty:
-    your_team_row = your_team_row_df.iloc[0]
+    if not your_team_row_df.empty:
+        your_team_row = your_team_row_df.iloc[0]
 
     if top_team is not None and team_name == top_team["Team Name"]:
         # 🎉 Your team is already #1!
@@ -466,48 +466,48 @@ if not your_team_row_df.empty:
         """, unsafe_allow_html=True)
 
 # Show additional service leaderboards side-by-side
-# ✅ Ensure 'Team_Logo' exists before showing service leaderboards
-if 'Team_Logo' not in df.columns:
-    df['Team Name'] = df['Team Name'].astype(str)
-    df['Team_Logo'] = df['Team Name'].apply(
-        lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='40'>" if pd.notna(name) else ""
-    )
-
-# Show additional service leaderboards side-by-side
-col1, col2, col3, col4, col5 = st.columns(5)
-
-with col1:
-    show_service_leaderboard(df[df['Calls'] >= 1], 'Lawn Treatment', '🌱', 'Lawn Treatment')
-
-with col2:
-    show_service_leaderboard(df[df['Calls'] >= 1], 'Bush Trimming', '🌳', 'Bush Trim')
-
-with col3:
-    show_service_leaderboard(df[df['Calls'] >= 1], 'Mosquito', '🦟', 'Mosquito')
-
-with col4:
-    show_service_leaderboard(df[df['Calls'] >= 1], 'Flower Bed Weeding', '🌸', 'Flower Bed Weeding')
-
-with col5:
-    show_service_leaderboard(df[df['Calls'] >= 1], 'Leaf Removal', '🍂', 'Leaf Removal')
-
-
-# 🍃 Full LT Leaderboard with additional services
-if 'Lawn Treatment' in df.columns:
-    df['Lawn Treatment'] = pd.to_numeric(df['Lawn Treatment'], errors='coerce').fillna(0)
-    df['Bush Trimming'] = pd.to_numeric(df.get('Bush Trimming', 0), errors='coerce').fillna(0)
-    df['Mosquito'] = pd.to_numeric(df.get('Mosquito', 0), errors='coerce').fillna(0)
-    df['Flower Bed Weeding'] = pd.to_numeric(df.get('Flower Bed Weeding', 0), errors='coerce').fillna(0)
-    df['Leaf Removal'] = pd.to_numeric(df.get('Leaf Removal', 0), errors='coerce').fillna(0)
-
+    # ✅ Ensure 'Team_Logo' exists before showing service leaderboards
     if 'Team_Logo' not in df.columns:
-        df['Team_Logo'] = df['Team Name'].astype(str).apply(
-            lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='30'>" if pd.notna(name) else ""
+        df['Team Name'] = df['Team Name'].astype(str)
+        df['Team_Logo'] = df['Team Name'].apply(
+            lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='40'>" if pd.notna(name) else ""
         )
 
-    lt_leaderboard = df[df['Calls'] >= 1].copy()
-    lt_leaderboard = lt_leaderboard.sort_values(by='Lawn Treatment', ascending=False).reset_index(drop=True)
-    lt_leaderboard['Rank'] = lt_leaderboard.index + 1
+    # Show additional service leaderboards side-by-side
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    with col1:
+        show_service_leaderboard(df[df['Calls'] >= 1], 'Lawn Treatment', '🌱', 'Lawn Treatment')
+
+    with col2:
+        show_service_leaderboard(df[df['Calls'] >= 1], 'Bush Trimming', '🌳', 'Bush Trim')
+
+    with col3:
+        show_service_leaderboard(df[df['Calls'] >= 1], 'Mosquito', '🦟', 'Mosquito')
+
+    with col4:
+        show_service_leaderboard(df[df['Calls'] >= 1], 'Flower Bed Weeding', '🌸', 'Flower Bed Weeding')
+
+    with col5:
+        show_service_leaderboard(df[df['Calls'] >= 1], 'Leaf Removal', '🍂', 'Leaf Removal')
+
+
+    # 🍃 Full LT Leaderboard with additional services
+    if 'Lawn Treatment' in df.columns:
+        df['Lawn Treatment'] = pd.to_numeric(df['Lawn Treatment'], errors='coerce').fillna(0)
+        df['Bush Trimming'] = pd.to_numeric(df.get('Bush Trimming', 0), errors='coerce').fillna(0)
+        df['Mosquito'] = pd.to_numeric(df.get('Mosquito', 0), errors='coerce').fillna(0)
+        df['Flower Bed Weeding'] = pd.to_numeric(df.get('Flower Bed Weeding', 0), errors='coerce').fillna(0)
+        df['Leaf Removal'] = pd.to_numeric(df.get('Leaf Removal', 0), errors='coerce').fillna(0)
+
+        if 'Team_Logo' not in df.columns:
+            df['Team_Logo'] = df['Team Name'].astype(str).apply(
+                lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='30'>" if pd.notna(name) else ""
+            )
+
+        lt_leaderboard = df[df['Calls'] >= 1].copy()
+        lt_leaderboard = lt_leaderboard.sort_values(by='Lawn Treatment', ascending=False).reset_index(drop=True)
+        lt_leaderboard['Rank'] = lt_leaderboard.index + 1
 
     # Use First and Last Name instead of email
     lt_leaderboard['Rep Name'] = lt_leaderboard.apply(
