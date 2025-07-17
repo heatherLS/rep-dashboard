@@ -35,8 +35,14 @@ with tab1:
     today = datetime.now()
 
     if 'Birthday' in df.columns:
-        df['Birthday'] = pd.to_datetime(df['Birthday'], errors='coerce')
-        bdays_today = df[df['Birthday'].dt.strftime('%m-%d') == today.strftime('%m-%d')]
+        # Clean up column headers
+        df.columns = df.columns.str.strip()
+
+        # Parse month and day from 'Birthday' even if year is missing
+        df['Birthday_MD'] = pd.to_datetime(df['Birthday'] + ' 2000', format='%B %d %Y', errors='coerce')
+
+        today_md = today.strftime('%m-%d')
+        bdays_today = df[df['Birthday_MD'].dt.strftime('%m-%d') == today_md]
         for _, row in bdays_today.iterrows():
             st.markdown(f"<div style='text-align: center; color: orange; font-size: 20px;'>🌼🎉 Happy Birthday, {row['First_Name']}! 🎉🌼</div>", unsafe_allow_html=True)
 
@@ -79,7 +85,7 @@ with tab1:
     user_data = df[df[rep_col] == user]
     first_name = user_data['First_Name'].values[0] if not user_data.empty else "Rep"
 
-with tab1:
+
     # Your current leaderboard, shoutouts, and top 3 service blocks here...
 
     selected_rep = st.session_state.get("selected_rep", None)
@@ -324,29 +330,44 @@ if 'Team Name' in df.columns:
 
 
 
-    # 🥇 Get top team stats
+   # 🥇 Get top team stats (used internally, not displayed)
+if not team_totals.empty:
     top_team_row = team_totals.sort_values(by="Conversion", ascending=False).iloc[0]
     top_team_name = top_team_row['Team Name']
     top_team_wins = top_team_row['Total_Wins']
     top_team_attaches = df[df['Team Name'] == top_team_name][['Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']].sum().sum()
     top_team_lt = df[df['Team Name'] == top_team_name]['Lawn Treatment'].sum()
 
+
+
     # 🧮 Your team stats (already defined as team_name)
-    your_team_wins = team_totals.loc[team_totals['Team Name'] == team_name, 'Total_Wins'].values[0]
-    your_team_attaches = df[df['Team Name'] == team_name][['Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']].sum().sum()
-    your_team_lt = df[df['Team Name'] == team_name]['Lawn Treatment'].sum()
+    if team_name in team_totals['Team Name'].values:
+        your_team_wins = team_totals.loc[team_totals['Team Name'] == team_name, 'Total_Wins'].values[0]
+        your_team_attaches = df[df['Team Name'] == team_name][['Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']].sum().sum()
+        your_team_lt = df[df['Team Name'] == team_name]['Lawn Treatment'].sum()
+    else:
+        your_team_wins = your_team_attaches = your_team_lt = 0
+
 
     # 📈 Calculate required additional wins to beat top team's conversion rate
-    top_team = team_totals.sort_values(by="Conversion", ascending=False).iloc[0]
-    your_team_row_df = team_totals[team_totals["Team Name"] == team_name]
+    top_team = None
+    if (
+        not team_totals.empty and 
+        "Conversion" in team_totals.columns and 
+        not team_totals["Conversion"].isna().all()
+    ):
+        sorted_teams = team_totals.sort_values(by="Conversion", ascending=False)
+        if not sorted_teams.empty:
+            top_team = sorted_teams.iloc[0]
+
 
     # 📈 Your team info
-your_team_row_df = team_totals[team_totals["Team Name"] == team_name]
+    your_team_row_df = team_totals[team_totals["Team Name"] == team_name]
 
 if not your_team_row_df.empty:
     your_team_row = your_team_row_df.iloc[0]
 
-    if team_name == top_team["Team Name"]:
+    if top_team is not None and team_name == top_team["Team Name"]:
         # 🎉 Your team is already #1!
         st.markdown(f"""
         <div style='text-align: center; font-size: 20px; margin-top: 10px; padding: 12px; border-radius: 10px;
@@ -355,7 +376,8 @@ if not your_team_row_df.empty:
             Keep crushing it to stay on top! 💪🔥
         </div>
         """, unsafe_allow_html=True)
-    else:
+
+    elif top_team is not None:
         # Calculate how many more wins your team needs to take the top spot
         your_wins = your_team_row["Total_Wins"]
         your_calls = your_team_row["Total_Calls"]
@@ -384,6 +406,7 @@ if not your_team_row_df.empty:
             to surpass the top team.
         </div>
         """, unsafe_allow_html=True)
+
 
 
 
@@ -443,6 +466,14 @@ if not your_team_row_df.empty:
         """, unsafe_allow_html=True)
 
 # Show additional service leaderboards side-by-side
+# ✅ Ensure 'Team_Logo' exists before showing service leaderboards
+if 'Team_Logo' not in df.columns:
+    df['Team Name'] = df['Team Name'].astype(str)
+    df['Team_Logo'] = df['Team Name'].apply(
+        lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='40'>" if pd.notna(name) else ""
+    )
+
+# Show additional service leaderboards side-by-side
 col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
@@ -459,6 +490,7 @@ with col4:
 
 with col5:
     show_service_leaderboard(df[df['Calls'] >= 1], 'Leaf Removal', '🍂', 'Leaf Removal')
+
 
 # 🍃 Full LT Leaderboard with additional services
 if 'Lawn Treatment' in df.columns:
@@ -766,6 +798,6 @@ with tab3:
 # 📅 TAB 4: Yesterday’s Snapshot
 # --------------------------------------------
 with tab4:
-    st.markdown("<h1 style='text-align: center;'>🗓️ Coming SOON: Incorrect below Yesterday's Leaderboard</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center;'>🗓️ COMING SOON- INCORRECT DATA BELOW Yesterday's Leaderboard</h1>", unsafe_allow_html=True)
 
    
