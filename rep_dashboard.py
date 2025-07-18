@@ -362,6 +362,7 @@ with tab1:
 
 
     # 📈 Your team info
+
     your_team_row_df = team_totals[team_totals["Team Name"] == team_name]
 
     if not your_team_row_df.empty:
@@ -727,9 +728,9 @@ with tab3:
     st.info(f"Your area of growth: **{focus}** — currently {metrics[focus]:.2f}%")
 
     total_points = sum(points.values())
-    payout_levels = {8: "$5.00", 7: "$4.00", 6: "$3.00", 5: "$2.00", 3: "$1.00"}
-    eligible = all(p >= 0 for p in points.values())
-    hourly = payout_levels.get(total_points, "$0.00") if eligible else "$0.00"
+    raw_bonus = row.get('Bonus Pay', 0)
+    hourly = f"${float(raw_bonus):.2f}" if raw_bonus and str(raw_bonus).strip().replace("$", "") != "0" else "$0.00"
+
 
     st.markdown(f"**🌼 Points Earned:** {total_points} — **Hourly Forecast:** {hourly}")
     st.caption("You’ll earn this rate *only* if all 4 base qualifiers are met.")
