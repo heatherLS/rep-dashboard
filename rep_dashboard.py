@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 import streamlit.components.v1 as components
 from datetime import datetime, timedelta
@@ -13,15 +14,19 @@ st.title("🌟 Sales Rep Performance Dashboard")
 # 🔁 Auto-refresh every 60 seconds (60000 ms)
 st_autorefresh(interval=60000, key="datarefresh")
 
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Leaderboard", "🧮 Calculator", "💰Bonus & History", "📅 Yesterday"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Leaderboard", "🧮 Calculator", "💰Bonus & History", "📅 Yesterday", "👩‍💻 Team Lead Dashboard"])
 
 # ---- Shared Config ----
 sheet_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=171451260"
 
 history_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=303010891"
-@st.cache_data(ttl=86400)  # cache for 24 hours (86400 seconds)
+@st.cache_data(ttl=86400)
 def load_history():
-    return pd.read_csv(history_url, header=1)
+    df = pd.read_csv(history_url, header=1)
+    df = df[df['Rep'].notna()]
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    return df
+
 
 
 def load_data():
@@ -368,27 +373,47 @@ with tab1:
     if not your_team_row_df.empty:
         your_team_row = your_team_row_df.iloc[0]
 
-    if top_team is not None and team_name == top_team["Team Name"]:
-        # 🎉 Your team is already #1!
-        st.markdown(f"""
-        <div style='text-align: center; font-size: 20px; margin-top: 10px; padding: 12px; border-radius: 10px;
-                    background-color: rgba(0, 128, 0, 0.1); color: #d1ffd1; border: 2px solid #0f0;'>
-            🎉 <b>Congrats, {team_name} is currently the top team!</b><br>
-            Keep crushing it to stay on top! 💪🔥
-        </div>
-        """, unsafe_allow_html=True)
+        if top_team is not None and team_name == top_team["Team Name"]:
+            # 🎉 Your team is already #1!
+            st.markdown(f"""
+            <div style='text-align: center; font-size: 20px; margin-top: 10px; padding: 12px; border-radius: 10px;
+                        background-color: rgba(0, 128, 0, 0.1); color: #d1ffd1; border: 2px solid #0f0;'>
+                🎉 <b>Congrats, {team_name} is currently the top team!</b><br>
+                Keep crushing it to stay on top! 💪🔥
+            </div>
+            """, unsafe_allow_html=True)
 
-    elif top_team is not None:
-        # Calculate how many more wins your team needs to take the top spot
-        your_wins = your_team_row["Total_Wins"]
-        your_calls = your_team_row["Total_Calls"]
-        top_conversion_rate = top_team["Conversion"] / 100
+        elif top_team is not None:
+            # Calculate how many more wins your team needs to take the top spot
+            your_wins = your_team_row["Total_Wins"]
+            your_calls = your_team_row["Total_Calls"]
+            top_conversion_rate = top_team["Conversion"] / 100
 
-        denominator = 1 - top_conversion_rate
-        if denominator <= 0:
-            needed_wins = 0
-        else:
-            needed_wins = max(0, math.ceil((top_conversion_rate * your_calls - your_wins) / denominator))
+            denominator = 1 - top_conversion_rate
+            if denominator <= 0:
+                needed_wins = 0
+            else:
+                 needed_wins = max(0, math.ceil((top_conversion_rate * your_calls - your_wins) / denominator))
+
+            needed_attaches = max(0, int(top_team_attaches - your_team_attaches))
+            needed_lt = max(0, int(top_team_lt - your_team_lt))
+
+            st.markdown(f"""
+            <div style='text-align: center; font-size: 18px; margin-top: 10px; padding: 10px; border-radius: 8px;
+                        background-color: rgba(255, 255, 255, 0.05); color: #f9f9f9; border: 1px solid #444;'>
+                <b>Can your team take the top spot?</b><br><br>
+                🏆 Top Team: <b>{top_team["Team Name"]}</b><br>
+                💪 Your Team: <b>{team_name}</b><br><br>
+                Your team needs:<br>
+                • <b>{needed_wins} more wins</b><br>
+                • <b>{needed_attaches} more attaches</b><br>
+                • <b>{needed_lt} more Lawn Treatments</b><br>
+                to surpass the top team.
+            </div>
+            """, unsafe_allow_html=True)
+
+    else:
+        st.warning("⚠️ Could not calculate your team's comparison — team data was not found.")
 
         # 📉 Calculate attaches and LT
         needed_attaches = max(0, int(top_team_attaches - your_team_attaches))
@@ -800,5 +825,223 @@ with tab3:
 # --------------------------------------------
 with tab4:
     st.markdown("<h1 style='text-align: center;'>🗓️ COMING SOON- INCORRECT DATA BELOW Yesterday's Leaderboard</h1>", unsafe_allow_html=True)
+
+
+# --------------------------------------------
+# 👩‍💻 TAB 5:  Team Lead Dashboard
+# --------------------------------------------
+
+with tab5:
+
+    df = load_data()
+    history_df = load_history()
+
+    # ---- SELECT TEAM LEAD ----
+    manager_directs = df['Manager_Direct'].dropna().unique()
+    selected_lead = st.selectbox("Select Your Name (Team Lead):", sorted(manager_directs))
+
+    # Filter reps under selected team lead
+    team_df = df[df['Manager_Direct'] == selected_lead].copy()
+
+    # ---- TEAM STATS ----
+    st.subheader(f"📊 Team Stats for {selected_lead}")
+    if team_df.empty:
+        st.warning("No reps found for this Team Lead.")
+    else:
+        attach_cols = ['Lawn Treatment', 'Leaf Removal', 'Mosquito', 'Flower Bed Weeding', 'Bush Trimming', 'Wins', 'Calls']
+        for col in attach_cols:
+            team_df[col] = pd.to_numeric(team_df[col], errors='coerce').fillna(0)
+
+        team_df['All-In Attach %'] = (
+            (team_df['Lawn Treatment'] +
+            team_df['Leaf Removal'] +
+            team_df['Mosquito'] +
+            team_df['Flower Bed Weeding'] +
+            team_df['Bush Trimming']) /
+            team_df['Wins'].replace(0, np.nan)
+        ) * 100
+        team_df['All-In Attach %'] = team_df['All-In Attach %'].fillna(0)
+
+        cols_to_show = ['Name_Proper', 'Conversion', 'LT Attach', 'All-In Attach %', 'BonusQA']
+        display_df = team_df[cols_to_show].copy()
+        display_df.columns = ['Rep', 'Conversion %', 'LT Attach %', 'All-In Attach %', 'QA %']
+
+        for col in ['Conversion %', 'LT Attach %', 'QA %']:
+            display_df[col] = (
+                display_df[col]
+                .astype(str)
+                .str.replace('%', '', regex=False)
+                .str.strip()
+                .replace(['', 'nan'], '0')
+                .str.extract(r'([0-9.]+)', expand=False)
+                .fillna('0')
+                .astype(float)
+            )
+
+        total_calls = team_df['Calls'].sum()
+        total_wins = team_df['Wins'].sum()
+        total_lawn_treatments = team_df['Lawn Treatment'].sum()
+        total_attaches = (
+            team_df['Lawn Treatment'] +
+            team_df['Leaf Removal'] +
+            team_df['Mosquito'] +
+            team_df['Flower Bed Weeding'] +
+            team_df['Bush Trimming']
+        ).sum()
+
+        avg_conversion = (total_wins / total_calls) * 100 if total_calls > 0 else 0
+        avg_attach = (total_attaches / total_wins) * 100 if total_wins > 0 else 0
+        avg_lt = (total_lawn_treatments / total_wins) * 100 if total_wins > 0 else 0
+        valid_qa = display_df['QA %']
+        valid_qa = valid_qa[valid_qa > 0]
+        avg_qa = valid_qa.mean() if not valid_qa.empty else 0
+
+
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Conversion Avg", f"{avg_conversion:.1f}%")
+        col2.metric("All-in Attach Avg", f"{avg_attach:.1f}%")
+        col3.metric("LT Attach Avg", f"{avg_lt:.1f}%")
+        col4.metric("QA Avg", f"{avg_qa:.1f}%")
+
+        display_df.set_index('Rep', inplace=True)
+
+        def highlight_top_nonzero(s):
+            is_max = s == s[s > 0].max()
+            return ['background-color: #FFD700; color: black' if v else '' for v in is_max]
+
+        highlight_style = display_df.style.apply(highlight_top_nonzero, axis=0)
+        st.write("### Rep Breakdown")
+        st.dataframe(highlight_style.format("{:.2f}"), use_container_width=True)
+
+        # ---- SHOUTOUT GENERATOR ----
+        st.subheader("📣 Shoutout Generator")
+        fun_phrases = {
+            "Conversion %": "Now that's how you mow down objections!",
+            "LT Attach %": "Sprinkling in those extras like a true lawn care artist!",
+            "All-In Attach %": "Pulled out all the weeds and sealed the deal!",
+            "QA %": "Precision cuts and perfect scripts — QA on point!"
+        }
+
+        top_performers = {}
+        for col in display_df.columns:
+            non_zero_vals = display_df[col][display_df[col] > 0]
+            if not non_zero_vals.empty:
+                top_performer = non_zero_vals.idxmax()
+                top_value = non_zero_vals.max()
+                top_performers[col] = (top_performer, top_value)
+
+        for metric, (rep, value) in top_performers.items():
+            shoutout = f"🌟 Big shoutout to **{rep}** for leading the team in **{metric}** at **{value:.1f}%**! {fun_phrases.get(metric, 'You raked in results!')}"
+            st.code(shoutout, language='markdown')
+
+        # ---- MOST IMPROVED ----
+        st.subheader("🔄 Most Improved")
+
+        available_dates = sorted(history_df['Date'].dropna().dt.date.unique())
+
+        st.write("### Select Timeframes to Compare")
+        col_a, col_b = st.columns(2)
+
+        with col_a:
+            start_a = st.selectbox("Start of Period A", available_dates, index=0, key='start_a')
+            end_a = st.selectbox("End of Period A", available_dates, index=len(available_dates)//2, key='end_a')
+
+        with col_b:
+            start_b = st.selectbox("Start of Period B", available_dates, index=len(available_dates)//2 + 1, key='start_b')
+            end_b = st.selectbox("End of Period B", available_dates, index=len(available_dates)-1, key='end_b')
+
+        def get_period_df(start, end):
+            period_df = history_df[(history_df['Date'].dt.date >= start) &
+                                    (history_df['Date'].dt.date <= end) &
+                                    (history_df['Manager_Direct'] == selected_lead)].copy()
+            for col in ['Lawn Treatment', 'Leaf Removal', 'Mosquito', 'Flower Bed Weeding', 'Bush Trimming', 'Wins']:
+                period_df[col] = pd.to_numeric(period_df[col], errors='coerce').fillna(0)
+            period_df['All-In Attach %'] = (
+                (period_df['Lawn Treatment'] +
+                period_df['Leaf Removal'] +
+                period_df['Mosquito'] +
+                period_df['Flower Bed Weeding'] +
+                period_df['Bush Trimming']) /
+                period_df['Wins'].replace(0, np.nan)
+            ) * 100
+            period_df['All-In Attach %'] = period_df['All-In Attach %'].fillna(0)
+            return period_df
+
+        df_a = get_period_df(start_a, end_a)
+        df_b = get_period_df(start_b, end_b)
+
+        improvements = []
+        for _, row in display_df.reset_index().iterrows():
+            rep_name = row['Rep']
+            a = df_a[df_a['Name_Proper'] == rep_name]
+            b = df_b[df_b['Name_Proper'] == rep_name]
+            if not a.empty and not b.empty:
+                prev_conversion = pd.to_numeric(a['Conversion'].str.replace('%',''), errors='coerce').mean()
+                prev_lt = pd.to_numeric(a['LT Attach'].str.replace('%',''), errors='coerce').mean()
+                prev_qa = pd.to_numeric(a['BonusQA'].str.replace('%',''), errors='coerce').mean()
+                prev_attach = pd.to_numeric(a['All-In Attach %'], errors='coerce').mean()
+
+                current_conversion = pd.to_numeric(b['Conversion'].str.replace('%',''), errors='coerce').mean()
+                current_lt = pd.to_numeric(b['LT Attach'].str.replace('%',''), errors='coerce').mean()
+                current_qa = pd.to_numeric(b['BonusQA'].str.replace('%',''), errors='coerce').mean()
+                current_attach = pd.to_numeric(b['All-In Attach %'], errors='coerce').mean()
+
+                improvements.append({
+                    'Rep': rep_name,
+                    'Conversion Before': prev_conversion,
+                    'Conversion Now': current_conversion,
+                    'Conversion Change': current_conversion - prev_conversion,
+                    'LT Attach Before': prev_lt,
+                    'LT Attach Now': current_lt,
+                    'LT Attach Change': current_lt - prev_lt,
+                    'All-In Attach Before': prev_attach,
+                    'All-In Attach Now': current_attach,
+                    'All-In Attach Change': current_attach - prev_attach,
+                    'QA Before': prev_qa,
+                    'QA Now': current_qa,
+                    'QA Change': current_qa - prev_qa
+                })
+
+        if improvements:
+            imp_df = pd.DataFrame(improvements)
+            for col in ['Conversion Change', 'LT Attach Change', 'All-In Attach Change', 'QA Change']:
+                imp_df[col] = imp_df[col].map(lambda x: f"⬆️ {x:.1f}%" if x > 0 else (f"⬇️ {abs(x):.1f}%" if x < 0 else "—"))
+
+            st.dataframe(imp_df, use_container_width=True)
+                # 🎯 Most Improved Shoutout + Honorable Mentions
+            shout_metrics = ['Conversion Change', 'LT Attach Change', 'All-In Attach Change', 'QA Change']
+            improvement_scores = []
+
+            for _, row in imp_df.iterrows():
+                score = 0
+                for metric in shout_metrics:
+                    if '⬆️' in row[metric]:
+                        score += float(row[metric].replace('⬆️','').replace('%','').strip())
+                improvement_scores.append((row['Rep'], score))
+
+            if improvement_scores:
+                sorted_improvers = sorted(improvement_scores, key=lambda x: x[1], reverse=True)
+                most_improved_rep, top_score = sorted_improvers[0]
+            
+                st.markdown(
+                    f"""### 🌟 **Most Improved Agent**  
+                    Massive congrats to **{most_improved_rep}**, who made the biggest leap in performance — you're leveling up like a legend! 🚀"""
+                )
+
+                # Honorable Mentions
+                honorable_mentions = sorted_improvers[1:4]  # up to 3
+                if honorable_mentions:
+                    shout_lines = [f"**{rep}** (Total Gain: {score:.1f}%)" for rep, score in honorable_mentions]
+                    shout_text = " • ".join(shout_lines)
+                    st.markdown(f"🏅 **Honorable Mentions:** {shout_text}")
+
+
+        # Placeholder Sections
+        st.subheader("🏆 Personal Bests (Coming Soon)")
+        st.subheader("💸 Bonus Tracker (Coming Soon)")
+        st.subheader("⚔️ Compare With Another Team (Coming Soon)")
+
+
 
    
