@@ -58,29 +58,47 @@ with tab1:
     st.markdown("<h1 style='text-align: center;'>📊 Conversion Rate Leaderboard</h1>", unsafe_allow_html=True)
     df = load_data()
 
-    # 🎂 Birthday & Anniversary shoutouts
     from pytz import timezone
-    eastern = timezone('US/Eastern')
-    today = datetime.now(eastern).date()
+eastern = timezone('US/Eastern')
+today = datetime.now(eastern).date()
 
-    if 'Birthday' in df.columns:
-        # Clean up column headers
-        df.columns = df.columns.str.strip()
+# 🧹 Clean headers and strip spaces
+df.columns = df.columns.str.strip()
 
-        # Parse month and day from 'Birthday' even if year is missing
-        df['Birthday_MD'] = pd.to_datetime(df['Birthday'] + ' 2000', format='%B %d %Y', errors='coerce')
+# 🎂 Handle Birthdays
+if 'Birthday' in df.columns:
+    def clean_birthday(date_str):
+        if pd.isna(date_str):
+            return pd.NaT
+        try:
+            # Remove extra spaces
+            date_str = " ".join(str(date_str).split()).strip()
+            return pd.to_datetime(date_str + ' 2000', format='%B %d %Y', errors='coerce')
+        except:
+            return pd.NaT
 
-        today_md = today.strftime('%m-%d')
-        bdays_today = df[df['Birthday_MD'].dt.strftime('%m-%d') == today_md]
-        for _, row in bdays_today.iterrows():
-            st.markdown(f"<div style='text-align: center; color: orange; font-size: 20px;'>🌼🎉 Happy Birthday, {row['First_Name']}! 🎉🌼</div>", unsafe_allow_html=True)
+    df['Birthday_MD'] = df['Birthday'].apply(clean_birthday)
+    today_md = today.strftime('%m-%d')
+    bdays_today = df[df['Birthday_MD'].dt.strftime('%m-%d') == today_md]
 
-    if 'Start Date' in df.columns:
-        df['Start Date'] = pd.to_datetime(df['Start Date'], errors='coerce')
-        anniv_today = df[df['Start Date'].dt.date == today]
-        for _, row in anniv_today.iterrows():
-            years = today.year - row['Start Date'].year
-            st.markdown(f"<div style='text-align: center; color: teal; font-size: 20px;'>🥳🎉 Happy {years}-year Anniversary, {row['First_Name']}! 🎉🥳</div>", unsafe_allow_html=True)
+    for _, row in bdays_today.iterrows():
+        st.markdown(
+            f"<div style='text-align: center; color: orange; font-size: 20px;'>🌼🎉 Happy Birthday, {row['First_Name']}! 🎉🌼</div>",
+            unsafe_allow_html=True
+        )
+
+# 🗓 Handle Anniversaries
+if 'Start Date' in df.columns:
+    df['Start Date'] = pd.to_datetime(df['Start Date'], errors='coerce')
+    anniv_today = df[df['Start Date'].dt.strftime('%m-%d') == today.strftime('%m-%d')]
+
+    for _, row in anniv_today.iterrows():
+        years = today.year - row['Start Date'].year
+        st.markdown(
+            f"<div style='text-align: center; color: teal; font-size: 20px;'>🥳🎉 Happy {years}-year Anniversary, {row['First_Name']}! 🎉🥳</div>",
+            unsafe_allow_html=True
+        )
+
 
     # ✅ Convert Calls to numeric and keep everyone for rep selection
     df['Calls'] = pd.to_numeric(df['Calls'], errors='coerce').fillna(0)
@@ -861,8 +879,9 @@ with tab4:
 
    
     # 🧠 Yesterday = actual performance day
-    yesterday = (datetime.now() - timedelta(days=1)).date()
-
+    from pytz import timezone
+    eastern = timezone('US/Eastern')
+    yesterday = datetime.now(eastern).date() - timedelta(days=1)
 
     # ✅ Clean the performance Date column
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
