@@ -59,23 +59,23 @@ with tab1:
     df = load_data()
 
     from pytz import timezone
-eastern = timezone('US/Eastern')
-today = datetime.now(eastern).date()
+    eastern = timezone('US/Eastern')
+    today = datetime.now(eastern).date()
 
-# 🧹 Clean headers and strip spaces
-df.columns = df.columns.str.strip()
+    # 🧹 Clean headers and strip spaces
+    df.columns = df.columns.str.strip()
 
-# 🎂 Handle Birthdays
-if 'Birthday' in df.columns:
-    def clean_birthday(date_str):
-        if pd.isna(date_str):
-            return pd.NaT
-        try:
-            # Remove extra spaces
-            date_str = " ".join(str(date_str).split()).strip()
-            return pd.to_datetime(date_str + ' 2000', format='%B %d %Y', errors='coerce')
-        except:
-            return pd.NaT
+    # 🎂 Handle Birthdays
+    if 'Birthday' in df.columns:
+        def clean_birthday(date_str):
+            if pd.isna(date_str):
+                return pd.NaT
+            try:
+                # Remove extra spaces
+                date_str = " ".join(str(date_str).split()).strip()
+                return pd.to_datetime(date_str + ' 2000', format='%B %d %Y', errors='coerce')
+            except:
+                return pd.NaT
 
     df['Birthday_MD'] = df['Birthday'].apply(clean_birthday)
     today_md = today.strftime('%m-%d')
