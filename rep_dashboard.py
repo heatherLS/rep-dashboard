@@ -1166,17 +1166,23 @@ with tab5:
         avg_conversion = (total_wins / total_calls) * 100 if total_calls > 0 else 0
         avg_attach = (total_attaches / total_wins) * 100 if total_wins > 0 else 0
         avg_lt = (total_lawn_treatments / total_wins) * 100 if total_wins > 0 else 0
+        # Display the first available QA % (since it's static over the 2-week period)
+        qa_values = team_df['BonusQA'].dropna().astype(str).str.replace('%', '', regex=False).str.extract(r'([0-9.]+)', expand=False).astype(float)
+        qa_display = qa_values.iloc[0] if not qa_values.empty else 0
+        col4.metric("QA (2-Week)", f"{qa_display:.1f}%")
+
+
+
+
         valid_qa = display_df['QA %']
         valid_qa = valid_qa[valid_qa > 0]
         avg_qa = valid_qa.mean() if not valid_qa.empty else 0
 
-
-
-        col1, col2, col3, col4 = st.columns(4)
         col1.metric("Conversion Avg", f"{avg_conversion:.1f}%")
         col2.metric("All-in Attach Avg", f"{avg_attach:.1f}%")
         col3.metric("LT Attach Avg", f"{avg_lt:.1f}%")
         col4.metric("QA Avg", f"{avg_qa:.1f}%")
+
 
         display_df.set_index('Rep', inplace=True)
 
@@ -1201,13 +1207,16 @@ with tab5:
         for col in display_df.columns:
             non_zero_vals = display_df[col][display_df[col] > 0]
             if not non_zero_vals.empty:
-                top_performer = non_zero_vals.idxmax()
                 top_value = non_zero_vals.max()
-                top_performers[col] = (top_performer, top_value)
+                tied_reps = non_zero_vals[non_zero_vals == top_value].index.tolist()
+                top_performers[col] = (tied_reps, top_value)
 
-        for metric, (rep, value) in top_performers.items():
-            shoutout = f"🌟 Big shoutout to **{rep}** for leading the team in **{metric}** at **{value:.1f}%**! {fun_phrases.get(metric, 'You raked in results!')}"
+
+        for metric, (reps, value) in top_performers.items():
+            rep_names = ", ".join([f"**{rep}**" for rep in reps])
+            shoutout = f"🌟 Big shoutout to {rep_names} for leading the team in **{metric}** at **{value:.1f}%**! {fun_phrases.get(metric, 'You raked in results!')}"
             st.code(shoutout, language='markdown')
+
 
         # ---- MOST IMPROVED ----
         st.subheader("🔄 Most Improved")
@@ -1227,20 +1236,44 @@ with tab5:
 
         def get_period_df(start, end):
             period_df = history_df[(history_df['Date'].dt.date >= start) &
-                                    (history_df['Date'].dt.date <= end) &
-                                    (history_df['Manager_Direct'] == selected_lead)].copy()
-            for col in ['Lawn Treatment', 'Leaf Removal', 'Mosquito', 'Flower Bed Weeding', 'Bush Trimming', 'Wins']:
-                period_df[col] = pd.to_numeric(period_df[col], errors='coerce').fillna(0)
-            period_df['All-In Attach %'] = (
-                (period_df['Lawn Treatment'] +
-                period_df['Leaf Removal'] +
-                period_df['Mosquito'] +
-                period_df['Flower Bed Weeding'] +
-                period_df['Bush Trimming']) /
-                period_df['Wins'].replace(0, np.nan)
+                                   (history_df['Date'].dt.date <= end) &
+                                   (history_df['Manager_Direct'] == selected_lead)].copy()
+
+            # Explicit list of needed numeric columns
+            cols_to_sum = [
+                'Calls', 'Wins', 'Lawn Treatment', 'Bush Trimming',
+                'Flower Bed Weeding', 'Mosquito', 'Leaf Removal'
+            ]
+
+            # Ensure all numeric columns are properly cleaned
+            for col in cols_to_sum:
+                period_df[col] = (
+                    period_df[col]
+                    .astype(str)
+                    .str.replace('%', '', regex=False)
+                    .str.extract(r'([0-9.]+)', expand=False)
+                    .astype(float)
+                    .fillna(0)
+                )
+
+            # Group by rep and sum raw numbers
+            grouped = period_df.groupby('Name_Proper')[cols_to_sum].sum().reset_index()
+
+            # Recalculate performance metrics
+            grouped['Conversion'] = (grouped['Wins'] / grouped['Calls'].replace(0, np.nan)) * 100
+            grouped['LT Attach'] = (grouped['Lawn Treatment'] / grouped['Wins'].replace(0, np.nan)) * 100
+            grouped['All-In Attach %'] = (
+                 (grouped['Lawn Treatment'] +
+                 grouped['Bush Trimming'] +
+                 grouped['Flower Bed Weeding'] +
+                 grouped['Mosquito'] +
+                 grouped['Leaf Removal']) /
+                grouped['Wins'].replace(0, np.nan)
             ) * 100
-            period_df['All-In Attach %'] = period_df['All-In Attach %'].fillna(0)
-            return period_df
+
+            grouped.fillna(0, inplace=True)
+
+            return grouped
 
         df_a = get_period_df(start_a, end_a)
         df_b = get_period_df(start_b, end_b)
@@ -1251,15 +1284,13 @@ with tab5:
             a = df_a[df_a['Name_Proper'] == rep_name]
             b = df_b[df_b['Name_Proper'] == rep_name]
             if not a.empty and not b.empty:
-                prev_conversion = pd.to_numeric(a['Conversion'].str.replace('%',''), errors='coerce').mean()
-                prev_lt = pd.to_numeric(a['LT Attach'].astype(str).str.replace('%','', regex=False), errors='coerce').mean()
-                prev_qa = pd.to_numeric(a['BonusQA'].str.replace('%',''), errors='coerce').mean()
-                prev_attach = pd.to_numeric(a['All-In Attach %'], errors='coerce').mean()
+                prev_conversion = a['Conversion'].iloc[0]
+                prev_lt = a['LT Attach'].iloc[0]
+                prev_attach = a['All-In Attach %'].iloc[0]
 
-                current_conversion = pd.to_numeric(b['Conversion'].str.replace('%',''), errors='coerce').mean()
-                current_lt = pd.to_numeric(b['LT Attach'].astype(str).str.replace('%','', regex=False), errors='coerce').mean()
-                current_qa = pd.to_numeric(b['BonusQA'].str.replace('%',''), errors='coerce').mean()
-                current_attach = pd.to_numeric(b['All-In Attach %'], errors='coerce').mean()
+                current_conversion = b['Conversion'].iloc[0]
+                current_lt = b['LT Attach'].iloc[0]
+                current_attach = b['All-In Attach %'].iloc[0]
 
                 improvements.append({
                     'Rep': rep_name,
@@ -1271,44 +1302,42 @@ with tab5:
                     'LT Attach Change': current_lt - prev_lt,
                     'All-In Attach Before': prev_attach,
                     'All-In Attach Now': current_attach,
-                    'All-In Attach Change': current_attach - prev_attach,
-                    'QA Before': prev_qa,
-                    'QA Now': current_qa,
-                    'QA Change': current_qa - prev_qa
+                    'All-In Attach Change': current_attach - prev_attach
                 })
 
         if improvements:
             imp_df = pd.DataFrame(improvements)
-            for col in ['Conversion Change', 'LT Attach Change', 'All-In Attach Change', 'QA Change']:
+            for col in ['Conversion Change', 'LT Attach Change', 'All-In Attach Change']:
                 imp_df[col] = imp_df[col].map(lambda x: f"⬆️ {x:.1f}%" if x > 0 else (f"⬇️ {abs(x):.1f}%" if x < 0 else "—"))
 
             st.dataframe(imp_df, use_container_width=True)
-                # 🎯 Most Improved Shoutout + Honorable Mentions
-            shout_metrics = ['Conversion Change', 'LT Attach Change', 'All-In Attach Change', 'QA Change']
-            improvement_scores = []
 
-            for _, row in imp_df.iterrows():
-                score = 0
-                for metric in shout_metrics:
-                    if '⬆️' in row[metric]:
-                        score += float(row[metric].replace('⬆️','').replace('%','').strip())
-                improvement_scores.append((row['Rep'], score))
+    # 🎯 Most Improved Shoutout + Honorable Mentions
+    shout_metrics = ['Conversion Change', 'LT Attach Change', 'All-In Attach Change']
+    improvement_scores = []
 
-            if improvement_scores:
-                sorted_improvers = sorted(improvement_scores, key=lambda x: x[1], reverse=True)
-                most_improved_rep, top_score = sorted_improvers[0]
-            
-                st.markdown(
-                    f"""### 🌟 **Most Improved Agent**  
-                    Massive congrats to **{most_improved_rep}**, who made the biggest leap in performance — you're leveling up like a legend! 🚀"""
-                )
+    for _, row in imp_df.iterrows():
+        score = 0
+        for metric in shout_metrics:
+            if '⬆️' in row[metric]:
+                score += float(row[metric].replace('⬆️','').replace('%','').strip())
+        improvement_scores.append((row['Rep'], score))
 
-                # Honorable Mentions
-                honorable_mentions = sorted_improvers[1:4]  # up to 3
-                if honorable_mentions:
-                    shout_lines = [f"**{rep}** (Total Gain: {score:.1f}%)" for rep, score in honorable_mentions]
-                    shout_text = " • ".join(shout_lines)
-                    st.markdown(f"🏅 **Honorable Mentions:** {shout_text}")
+    if improvement_scores:
+        sorted_improvers = sorted(improvement_scores, key=lambda x: x[1], reverse=True)
+        most_improved_rep, top_score = sorted_improvers[0]
+
+        st.markdown(
+            f"""### 🌟 **Most Improved Agent**  
+            Massive congrats to **{most_improved_rep}**, who made the biggest leap in performance — you're leveling up like a legend! 🚀"""
+        )
+
+        # Honorable Mentions
+        honorable_mentions = sorted_improvers[1:4]  # up to 3
+        if honorable_mentions:
+            shout_lines = [f"**{rep}** (Total Gain: {score:.1f}%)" for rep, score in honorable_mentions]
+            shout_text = " • ".join(shout_lines)
+            st.markdown(f"🏅 **Honorable Mentions:** {shout_text}")
 
 
         # Placeholder Sections
