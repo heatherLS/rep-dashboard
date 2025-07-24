@@ -59,7 +59,7 @@ with tab1:
     df = load_data()
 
     # 🎂 Birthday & Anniversary shoutouts
-    today = datetime.now()
+    today = datetime.now().date()
 
     if 'Birthday' in df.columns:
         # Clean up column headers
@@ -75,7 +75,7 @@ with tab1:
 
     if 'Start Date' in df.columns:
         df['Start Date'] = pd.to_datetime(df['Start Date'], errors='coerce')
-        anniv_today = df[df['Start Date'].dt.strftime('%m-%d') == today.strftime('%m-%d')]
+        anniv_today = df[df['Start Date'].dt.date == today]
         for _, row in anniv_today.iterrows():
             years = today.year - row['Start Date'].year
             st.markdown(f"<div style='text-align: center; color: teal; font-size: 20px;'>🥳🎉 Happy {years}-year Anniversary, {row['First_Name']}! 🎉🥳</div>", unsafe_allow_html=True)
