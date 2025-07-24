@@ -59,7 +59,9 @@ with tab1:
     df = load_data()
 
     # 🎂 Birthday & Anniversary shoutouts
-    today = datetime.now().date()
+    from pytz import timezone
+    eastern = timezone('US/Eastern')
+    today = datetime.now(eastern).date()
 
     if 'Birthday' in df.columns:
         # Clean up column headers
