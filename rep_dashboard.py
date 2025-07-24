@@ -23,14 +23,36 @@ history_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriH
 @st.cache_data(ttl=86400)
 def load_history():
     df = pd.read_csv(history_url, header=1)
+
+    # 🧼 Remove mid-sheet header rows
+    df = df[df['Date'].astype(str).str.lower() != 'date']
+
+    # ✅ Keep only rows that have valid reps
     df = df[df['Rep'].notna()]
+
+    # 📅 Convert 'Date' to datetime
     df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+
     return df
+
 
 
 
 def load_data():
     return pd.read_csv(sheet_url, header=1)
+
+def show_yesterday_service_top(df, column_name, emoji, title):
+    if column_name not in df.columns:
+        return
+    df[column_name] = pd.to_numeric(df[column_name], errors='coerce').fillna(0)
+    leaderboard = df[['Full_Name', column_name]].sort_values(by=column_name, ascending=False)
+    leaderboard = leaderboard[leaderboard[column_name] > 0].head(3)
+    if leaderboard.empty:
+        return
+    st.markdown(f"<h4 style='text-align: center;'>{emoji} Top 3 {title}</h4>", unsafe_allow_html=True)
+    for _, row in leaderboard.iterrows():
+        st.markdown(f"<div style='text-align: center;'>{row['Full_Name']} — {int(row[column_name])}</div>", unsafe_allow_html=True)
+
 
 with tab1:
     st.markdown("<h1 style='text-align: center;'>📊 Conversion Rate Leaderboard</h1>", unsafe_allow_html=True)
@@ -230,8 +252,12 @@ with tab1:
             st.markdown(f"<div style='text-align: center; font-size: 18px; color: orange;'>💡 Just {remaining} more to join the Double Digits Club!</div>", unsafe_allow_html=True)
     
     # 🎯 Conversion Milestones (Centered and Readable)
-    st.markdown("<h3 style='text-align:center; color:#ffffff;'>🎯 Conversion Milestones</h3>", unsafe_allow_html=True)
-
+    st.markdown("""
+    <div style='text-align: center; font-size: 20px; font-weight: bold; color: #222; margin-bottom: 10px;'>
+        🎯 Conversion Milestones
+    </div>
+    """, unsafe_allow_html=True)
+    
     conversion_targets = [19, 20, 21, 23, 26]
     call_count = int(user_calls)
     win_count = int(user_wins)
@@ -246,7 +272,8 @@ with tab1:
         rows.append(f"{target}% → Need {needed_wins} wins ({status})")
 
     st.markdown(
-        "<div style='text-align:center; font-size: 16px; line-height: 1.8; font-weight: 500; color: #f8f8f8;'>"
+        "<div style='background-color: #f4f4f4; color: #222; padding: 15px; border-radius: 8px; text-align: center; "
+        "font-size: 16px; line-height: 1.8; font-weight: 500; border: 1px solid #ccc;'>"
         + "<br>".join(rows) +
         "</div>",
         unsafe_allow_html=True
@@ -375,13 +402,14 @@ with tab1:
 
         if top_team is not None and team_name == top_team["Team Name"]:
             # 🎉 Your team is already #1!
-            st.markdown(f"""
-            <div style='text-align: center; font-size: 20px; margin-top: 10px; padding: 12px; border-radius: 10px;
-                        background-color: rgba(0, 128, 0, 0.1); color: #d1ffd1; border: 2px solid #0f0;'>
-                🎉 <b>Congrats, {team_name} is currently the top team!</b><br>
-                Keep crushing it to stay on top! 💪🔥
-            </div>
-            """, unsafe_allow_html=True)
+           st.markdown(f"""
+           <div style='text-align: center; font-size: 20px; margin-top: 10px; padding: 12px; border-radius: 10px;
+                       background-color: #e6ffe6; color: #004d00; border: 2px solid #00cc00;'>
+               🎉 <b>Congrats, {team_name} is currently the top team!</b><br>
+               Keep crushing it to stay on top! 💪🔥
+           </div>
+           """, unsafe_allow_html=True)
+
 
         elif top_team is not None:
             # Calculate how many more wins your team needs to take the top spot
@@ -400,7 +428,7 @@ with tab1:
 
             st.markdown(f"""
             <div style='text-align: center; font-size: 18px; margin-top: 10px; padding: 10px; border-radius: 8px;
-                        background-color: rgba(255, 255, 255, 0.05); color: #f9f9f9; border: 1px solid #444;'>
+                        background-color: #f0f0f0; color: #333; border: 1px solid #ccc;'>
                 <b>Can your team take the top spot?</b><br><br>
                 🏆 Top Team: <b>{top_team["Team Name"]}</b><br>
                 💪 Your Team: <b>{team_name}</b><br><br>
@@ -537,8 +565,8 @@ with tab1:
 
     # Use First and Last Name instead of email
     lt_leaderboard['Rep Name'] = lt_leaderboard.apply(
-        lambda row: f"{row.get('First Name', '')} {row.get('Last Name', '')}".strip()
-        if row.get('First Name') or row.get('Last Name') else row.get('Rep', 'Unknown'), axis=1
+        lambda row: f"{row.get('First_Name', '')} {row.get('Last_Name', '')}".strip()
+        if row.get('First_Name') or row.get('Last_Name') else row.get('Rep', 'Unknown'), axis=1
     )
 
     # Select and rename columns for display
@@ -824,7 +852,232 @@ with tab3:
 # 📅 TAB 4: Yesterday’s Snapshot
 # --------------------------------------------
 with tab4:
-    st.markdown("<h1 style='text-align: center;'>🗓️ COMING SOON- INCORRECT DATA BELOW Yesterday's Leaderboard</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center;'>📅 Yesterday's Leaderboard</h1>", unsafe_allow_html=True)
+
+    history_df = load_history()
+    history_df.columns = history_df.columns.str.strip()
+
+   
+    # 🧠 Yesterday = actual performance day
+    yesterday = (datetime.now() - timedelta(days=1)).date()
+
+
+    # ✅ Clean the performance Date column
+    history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
+    valid_dates = history_df['Date'].dropna().dt.date
+    available_dates = valid_dates.unique()
+
+    if yesterday in available_dates:
+        snapshot_date = yesterday
+    else:
+        snapshot_date = max(available_dates)
+        st.info(f"⚠️ No performance data found for {yesterday}. Showing most recent available data from {snapshot_date} instead.")
+
+    # ✅ Filter on performance date, not snapshot timestamp
+    yesterday_df = history_df[history_df['Date'].dt.date == snapshot_date]
+
+
+
+    # ✅ Get selected rep from session state
+    selected_rep = st.session_state.get("selected_rep")
+    if not selected_rep:
+        st.warning("Please select your name on the Leaderboard tab first.")
+        st.stop()
+
+    user_data = yesterday_df[yesterday_df['Rep'] == selected_rep]
+    if user_data.empty:
+        st.error(f"No performance data for {selected_rep} on {snapshot_date}.")
+        st.stop()
+
+    first_name = user_data['First_Name'].values[0] if 'First_Name' in user_data.columns else selected_rep
+    st.markdown(
+        f"<h3 style='text-align: center;'>🕰️ Snapshot for {first_name} — {yesterday.strftime('%B %d, %Y')}</h3>",
+        unsafe_allow_html=True
+    )
+
+    # ---- Your Stats
+    user_calls = int(user_data['Calls'].values[0])
+    user_wins = int(user_data['Wins'].values[0])
+    personal_conversion = (user_wins / user_calls * 100) if user_calls > 0 else 0
+
+    st.markdown(f"<h3 style='text-align: center;'>📞 {user_calls} Calls | 🏆 {user_wins} Wins | 🎯 {personal_conversion:.2f}% Conversion</h3>", unsafe_allow_html=True)
+
+    # ---- Team Info
+    team_name = user_data['Team Name'].values[0] if 'Team Name' in user_data.columns else "Unknown"
+    team_logo = f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{team_name.replace(' ', '_').lower()}.png' width='80'>" if pd.notna(team_name) else ""
+
+    st.markdown(f"<div style='text-align: center;'>{team_logo}<br><b>{team_name} (Yesterday)</b></div>", unsafe_allow_html=True)
+
+    # 🔧 Fix string columns so we can safely compare and calculate
+    numeric_cols = ['Calls', 'Wins', 'Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']
+    for col in numeric_cols:
+        if col in yesterday_df.columns:
+            yesterday_df[col] = pd.to_numeric(yesterday_df[col], errors='coerce').fillna(0)
+
+
+    # ---- Team Rank
+    team_stats = yesterday_df[yesterday_df['Calls'] > 0].copy()
+    team_stats['Calls'] = pd.to_numeric(team_stats['Calls'], errors='coerce')
+    team_stats['Wins'] = pd.to_numeric(team_stats['Wins'], errors='coerce')
+
+    team_totals = team_stats.groupby("Team Name").agg(
+        Total_Calls=("Calls", "sum"),
+        Total_Wins=("Wins", "sum")
+    ).reset_index()
+    team_totals['Conversion'] = (team_totals['Total_Wins'] / team_totals['Total_Calls']) * 100
+    team_totals['Rank'] = team_totals['Conversion'].rank(ascending=False, method='min').astype(int)
+
+    team_rank = team_totals.loc[team_totals['Team Name'] == team_name, 'Rank'].values[0] if team_name in team_totals['Team Name'].values else "N/A"
+    st.markdown(f"<div style='text-align: center; font-size: 18px;'>🏅 Team Rank Yesterday: <b>{team_rank}</b></div>", unsafe_allow_html=True)
+
+    # ---- Team Averages
+    team_df = yesterday_df[yesterday_df['Team Name'] == team_name].copy()
+    services = ['Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']
+    for svc in services:
+        team_df[svc] = pd.to_numeric(team_df.get(svc, 0), errors='coerce').fillna(0)
+
+    team_total_calls = team_df['Calls'].sum()
+    team_total_wins = team_df['Wins'].sum()
+    team_conversion_rate = (team_total_wins / team_total_calls * 100) if team_total_calls > 0 else 0
+    team_attach_total = team_df[services].sum(axis=1).sum()
+    team_attach_rate = (team_attach_total / team_total_wins * 100) if team_total_wins > 0 else 0
+    team_lt = team_df['Lawn Treatment'].sum()
+    team_lt_attach = (team_lt / team_total_wins * 100) if team_total_wins > 0 else 0
+
+    st.markdown(f"""
+    <div style='text-align:center; font-size: 18px; margin-top: 10px;'>
+        <b>Team Averages (Yesterday)</b><br>
+        🎯 Conversion: {team_conversion_rate:.2f}%<br>
+        🧩 All-In Attach: {team_attach_rate:.2f}%<br>
+        🌱 Lawn Treatment Attach: {team_lt_attach:.2f}%
+    </div>
+    """, unsafe_allow_html=True)
+
+
+    # ---- Top 3 Reps (Conversion)
+    active_df = yesterday_df[yesterday_df['Calls'] > 0].copy()
+    active_df['Conversion'] = (active_df['Wins'] / active_df['Calls']) * 100
+    active_df['Full_Name'] = active_df['First_Name'].astype(str).str.strip() + ' ' + active_df['Last_Name'].astype(str).str.strip()
+    active_df = active_df.sort_values(by='Conversion', ascending=False)
+
+    st.markdown("<h3 style='text-align: center;'>🏅 Top 3 Reps (Yesterday)</h3>", unsafe_allow_html=True)
+    medals = ["🥇", "🥈", "🥉"]
+
+    for i, (_, row) in enumerate(active_df.head(3).iterrows()):
+        logo_url = f"https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{row['Team Name'].replace(' ', '_').lower()}.png" if pd.notna(row['Team Name']) else ""
+        st.markdown(f"""
+            <div style='text-align: center; font-size: 18px;'>
+                <img src="{logo_url}" width="40"><br>
+                {medals[i]} {row['Full_Name']} — {row['Conversion']:.2f}%
+            </div>
+        """, unsafe_allow_html=True)
+
+
+
+    # ---- Top 3 Teams
+    st.markdown("<h3 style='text-align: center;'>👥 Top 3 Teams (Yesterday)</h3>", unsafe_allow_html=True)
+    cols = st.columns(3)
+    for i, (_, team_row) in enumerate(team_totals.sort_values(by="Conversion", ascending=False).head(3).iterrows()):
+        with cols[i]:
+            logo_url = f"https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{team_row['Team Name'].replace(' ', '_').lower()}.png"
+            st.markdown(f"""
+            <div style='text-align: center; font-size: 16px;'>
+                <b>{team_row['Team Name']}</b><br>
+                <img src="{logo_url}" width="60"><br>
+                {team_row['Conversion']:.2f}%<br>
+                {int(team_row['Total_Wins'])} wins / {int(team_row['Total_Calls'])} calls
+            </div>
+            """, unsafe_allow_html=True)
+
+    
+
+    # ---- Full Conversion Leaderboard (with logos)
+    active_df = active_df[['Full_Name', 'Team Name', 'Conversion']].reset_index(drop=True)
+    active_df['Rank'] = active_df.index + 1
+    active_df['Conversion'] = active_df['Conversion'].map('{:.2f}%'.format)
+
+
+    # Build Team Logo column
+    active_df['Team_Logo'] = active_df['Team Name'].astype(str).apply(
+        lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='30'>" if pd.notna(name) else ""
+    )
+
+    # Display Conversion leaderboard with logo
+    st.markdown("<h3 style='text-align: center;'>🏆 Full Conversion Leaderboard (Yesterday)</h3>", unsafe_allow_html=True)
+    st.markdown(
+        active_df[['Rank', 'Full_Name', 'Conversion', 'Team_Logo']].to_html(escape=False, index=False),
+        unsafe_allow_html=True
+    )
+
+
+    # ✅ Build Full_Name field for attach shoutouts
+    if 'Full_Name' not in yesterday_df.columns:
+        if 'First_Name' in yesterday_df.columns and 'Last_Name' in yesterday_df.columns:
+            yesterday_df['Full_Name'] = yesterday_df['First_Name'].astype(str).str.strip() + ' ' + yesterday_df['Last_Name'].astype(str).str.strip()
+        elif 'Name_Proper' in yesterday_df.columns:
+            yesterday_df['Full_Name'] = yesterday_df['Name_Proper']
+        else:
+            yesterday_df['Full_Name'] = yesterday_df['Rep']
+
+    # 🧩 Top 3 Attach Reps for each service
+    st.markdown("<hr><h3 style='text-align: center;'>🧩 Top 3 Attach Leaders (Yesterday)</h3>", unsafe_allow_html=True)
+    attach_cols = ['Lawn Treatment', 'Bush Trimming', 'Mosquito', 'Flower Bed Weeding', 'Leaf Removal']
+    emojis = ['🌿', '🌳', '🦟', '🌸', '🍂']
+    titles = ['Lawn Treatment', 'Bush Trim', 'Mosquito', 'Flower Bed Weeding', 'Leaf Removal']
+
+    attach_cols_zipped = zip(attach_cols, emojis, titles)
+    col_blocks = st.columns(len(attach_cols))
+    for col, (svc, emoji, title) in zip(col_blocks, attach_cols_zipped):
+        with col:
+            show_yesterday_service_top(yesterday_df.copy(), svc, emoji, title)
+
+
+    # 🧾 Full Attach Leaderboard
+    st.markdown("<h3 style='text-align: center;'>📋 Full Attach Service Leaderboard (Yesterday)</h3>", unsafe_allow_html=True)
+
+    # Make sure service columns are numeric
+    for col in attach_cols:
+        yesterday_df[col] = pd.to_numeric(yesterday_df.get(col, 0), errors='coerce').fillna(0)
+
+    # Build Team Logo column
+    if 'Team_Logo' not in yesterday_df.columns and 'Team Name' in yesterday_df.columns:
+        yesterday_df['Team_Logo'] = yesterday_df['Team Name'].astype(str).apply(
+            lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='30'>" if pd.notna(name) else ""
+        )
+
+    lt_display = yesterday_df[yesterday_df['Calls'] > 0].copy()  # 👈 Only reps with >0 calls
+    lt_display['Rank'] = lt_display['Lawn Treatment'].rank(ascending=False, method='min').astype(int)
+    lt_display = lt_display.sort_values(by='Lawn Treatment', ascending=False)
+
+
+    # Display columns
+    display_cols = ['Rank', 'Full_Name'] + attach_cols + ['Team_Logo']
+    lt_display = lt_display[display_cols]
+    lt_display.columns = ['Rank', 'Rep Name', 'Lawn Treatment', 'Bush Trimming', 'Mosquito', 'Flower Bed Weeding', 'Leaf Removal', 'Team Logo']
+
+    st.markdown(lt_display.to_html(escape=False, index=False), unsafe_allow_html=True)
+
+    # Style
+    st.markdown("""
+    <style>
+    table td, table th {
+        text-align: center !important;
+        vertical-align: middle;
+    }
+    table {
+        margin-left: auto;
+        margin-right: auto;
+        border-collapse: collapse;
+        width: 95%;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+    th {
+        background-color: #333;
+        color: white;
+        font-weight: bold;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 
 # --------------------------------------------
@@ -978,12 +1231,12 @@ with tab5:
             b = df_b[df_b['Name_Proper'] == rep_name]
             if not a.empty and not b.empty:
                 prev_conversion = pd.to_numeric(a['Conversion'].str.replace('%',''), errors='coerce').mean()
-                prev_lt = pd.to_numeric(a['LT Attach'].str.replace('%',''), errors='coerce').mean()
+                prev_lt = pd.to_numeric(a['LT Attach'].astype(str).str.replace('%','', regex=False), errors='coerce').mean()
                 prev_qa = pd.to_numeric(a['BonusQA'].str.replace('%',''), errors='coerce').mean()
                 prev_attach = pd.to_numeric(a['All-In Attach %'], errors='coerce').mean()
 
                 current_conversion = pd.to_numeric(b['Conversion'].str.replace('%',''), errors='coerce').mean()
-                current_lt = pd.to_numeric(b['LT Attach'].str.replace('%',''), errors='coerce').mean()
+                current_lt = pd.to_numeric(b['LT Attach'].astype(str).str.replace('%','', regex=False), errors='coerce').mean()
                 current_qa = pd.to_numeric(b['BonusQA'].str.replace('%',''), errors='coerce').mean()
                 current_attach = pd.to_numeric(b['All-In Attach %'], errors='coerce').mean()
 
