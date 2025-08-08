@@ -237,16 +237,16 @@ with tab1:
     st.markdown(f"<h3 style='text-align: center;'>{personal_conversion:.2f}%</h3>", unsafe_allow_html=True)
 
     # 🌝 Motivational Blurb
-    if personal_conversion >= 26:
+    if personal_conversion >= 27:
         st.success("🌟 Steve Green Level! You're an elite closer!")
         st.balloons()
-    elif personal_conversion >= 23:
+    elif personal_conversion >= 24:
         st.success("🚀 Super Duper Green! You're on fire!")
-    elif personal_conversion >= 21:
+    elif personal_conversion >= 22:
         st.info("🌿 Super Green! You're doing awesome!")
-    elif personal_conversion >= 20:
+    elif personal_conversion >= 21:
         st.info("📈 Green Zone! Keep pushing and you'll level up!")
-    elif personal_conversion >= 19:
+    elif personal_conversion >= 20:
         st.warning("🚫 Almost There! Just 1% more for payout.")
     else:
         st.error("❌ Below Base. Let’s lock in and close the gap!")
@@ -278,7 +278,7 @@ with tab1:
     </div>
     """, unsafe_allow_html=True)
     
-    conversion_targets = [19, 20, 21, 23, 26]
+    conversion_targets = [20, 21, 22, 24, 27]
     call_count = int(user_calls)
     win_count = int(user_wins)
 
@@ -442,6 +442,8 @@ with tab1:
                 needed_wins = 0
             else:
                  needed_wins = max(0, math.ceil((top_conversion_rate * your_calls - your_wins) / denominator))
+
+        
 
             needed_attaches = max(0, int(top_team_attaches - your_team_attaches))
             needed_lt = max(0, int(top_team_lt - your_team_lt))
@@ -882,21 +884,25 @@ with tab4:
     from pytz import timezone
     eastern = timezone('US/Eastern')
     yesterday = datetime.now(eastern).date() - timedelta(days=1)
+    yesterday_str = yesterday.strftime("%Y-%m-%d")  # ← compare using this
 
-    # ✅ Clean the performance Date column
+    # 🧼 Clean and parse
+    history_df['Date'] = history_df['Date'].astype(str).str.strip()
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
-    valid_dates = history_df['Date'].dropna().dt.date
-    available_dates = valid_dates.unique()
+    history_df['Date_str'] = history_df['Date'].dt.date.astype(str)  # ← compare from this
 
-    if yesterday in available_dates:
-        snapshot_date = yesterday
+    available_dates = history_df['Date_str'].dropna().unique().tolist()
+   
+    # 🧠 Pure string comparison now
+    if yesterday_str in available_dates:
+        snapshot_date = pd.to_datetime(yesterday_str).date()
+        st.success(f"✅ Showing performance snapshot for {snapshot_date}")
     else:
-        snapshot_date = max(available_dates)
-        st.info(f"⚠️ No performance data found for {yesterday}. Showing most recent available data from {snapshot_date} instead.")
+        snapshot_date = pd.to_datetime(max(available_dates)).date() if available_dates else None
+        st.info(f"⚠️ No performance data found for {yesterday_str}. Showing most recent available data from {snapshot_date} instead.")
 
-    # ✅ Filter on performance date, not snapshot timestamp
+    # ✅ Filter with actual Date column (not string version)
     yesterday_df = history_df[history_df['Date'].dt.date == snapshot_date]
-
 
 
     # ✅ Get selected rep from session state
@@ -1101,7 +1107,6 @@ with tab4:
     """, unsafe_allow_html=True)
 
 
-# --------------------------------------------
 # 👩‍💻 TAB 5:  Team Lead Dashboard
 # --------------------------------------------
 
@@ -1116,6 +1121,24 @@ with tab5:
 
     # Filter reps under selected team lead
     team_df = df[df['Manager_Direct'] == selected_lead].copy()
+
+    # Determine team name from the lead's reps
+    team_name = team_df['Team Name'].dropna().astype(str).unique()[0] if not team_df.empty else "Unknown"
+
+    # Calculate team rank across all teams
+    team_stats = df[df['Calls'] > 0].copy()
+    team_stats['Calls'] = pd.to_numeric(team_stats['Calls'], errors='coerce')
+    team_stats['Wins'] = pd.to_numeric(team_stats['Wins'], errors='coerce')
+
+    team_totals = team_stats.groupby("Team Name").agg(
+        Total_Calls=("Calls", "sum"),
+        Total_Wins=("Wins", "sum")
+    ).reset_index()
+    team_totals['Conversion'] = (team_totals['Total_Wins'] / team_totals['Total_Calls']) * 100
+    team_totals['Rank'] = team_totals['Conversion'].rank(ascending=False, method='min').astype(int)
+
+    # Extract this team’s rank
+    team_rank = int(team_totals.loc[team_totals['Team Name'] == team_name, 'Rank'].values[0]) if team_name in team_totals['Team Name'].values else "N/A"
 
     # ---- TEAM STATS ----
     st.subheader(f"📊 Team Stats for {selected_lead}")
@@ -1166,22 +1189,73 @@ with tab5:
         avg_conversion = (total_wins / total_calls) * 100 if total_calls > 0 else 0
         avg_attach = (total_attaches / total_wins) * 100 if total_wins > 0 else 0
         avg_lt = (total_lawn_treatments / total_wins) * 100 if total_wins > 0 else 0
-        # Display the first available QA % (since it's static over the 2-week period)
+
         qa_values = team_df['BonusQA'].dropna().astype(str).str.replace('%', '', regex=False).str.extract(r'([0-9.]+)', expand=False).astype(float)
         qa_display = qa_values.iloc[0] if not qa_values.empty else 0
-        col4.metric("QA (2-Week)", f"{qa_display:.1f}%")
 
+        # 🏆 Compare to top team
+        top_team = team_totals.sort_values(by="Conversion", ascending=False).iloc[0]
+        top_team_name = top_team["Team Name"]
 
+        df_numeric = df.copy()
+        for col in ['Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']:
+            df_numeric[col] = pd.to_numeric(df_numeric[col], errors='coerce').fillna(0)
+
+        top_team_attaches = df_numeric[df_numeric['Team Name'] == top_team_name][['Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']].sum().sum()
+        top_team_lt = df_numeric[df_numeric['Team Name'] == top_team_name]['Lawn Treatment'].sum()
+
+        your_team_attaches = team_df[['Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']].sum().sum()
+        your_team_lt = team_df['Lawn Treatment'].sum()
+
+        top_conversion_rate = top_team["Conversion"] / 100
+        denominator = 1 - top_conversion_rate
+
+        if denominator <= 0:
+            needed_wins = 0
+        else:
+            needed_wins = max(0, math.ceil((top_conversion_rate * total_calls - total_wins) / denominator))
+
+        needed_attaches = max(0, int(top_team_attaches - your_team_attaches))
+        needed_lt = max(0, int(top_team_lt - your_team_lt))
+
+        st.markdown(f"""
+        <div style='text-align: center; font-size: 18px; margin-top: 10px; padding: 10px; border-radius: 8px;
+                    background-color: #f0f0f0; color: #333; border: 1px solid #ccc;'>
+            <b>Can your team take the top spot?</b><br><br>
+            🏆 Top Team: <b>{top_team_name}</b><br>
+            💪 Your Team: <b>{team_name}</b><br><br>
+            Your team needs:<br>
+            • <b>{needed_wins} more wins</b><br>
+            • <b>{needed_attaches} more attaches</b><br>
+            • <b>{needed_lt} more Lawn Treatments</b><br>
+            to surpass the top team.
+        </div>
+        """, unsafe_allow_html=True)
 
 
         valid_qa = display_df['QA %']
         valid_qa = valid_qa[valid_qa > 0]
         avg_qa = valid_qa.mean() if not valid_qa.empty else 0
 
-        col1.metric("Conversion Avg", f"{avg_conversion:.1f}%")
-        col2.metric("All-in Attach Avg", f"{avg_attach:.1f}%")
-        col3.metric("LT Attach Avg", f"{avg_lt:.1f}%")
-        col4.metric("QA Avg", f"{avg_qa:.1f}%")
+        # 🧢 Team Logo + Rank
+        team_logo_url = f"https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{team_name.replace(' ', '_').lower()}.png"
+        st.markdown(f"""
+        <div style='text-align: center;'>
+            <img src="{team_logo_url}" width="100"><br>
+            <div style='font-size: 20px; color: teal; font-weight: bold;'>🏅 Team Rank: {team_rank}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # 🌱 Today’s Team Averages — Styled Block
+        st.markdown(f"""
+        <div style='text-align: center; font-size: 18px; margin-top: 10px;'>
+            <b>{team_name} — Today’s Team Averages:</b><br>
+            🧮 Conversion: {avg_conversion:.2f}%<br>
+            🧩 All-In Attach: {avg_attach:.2f}%<br>
+            🍃 Lawn Treatment Attach: {avg_lt:.2f}%
+        </div>
+        """, unsafe_allow_html=True)
+
 
 
         display_df.set_index('Rep', inplace=True)
@@ -1193,6 +1267,175 @@ with tab5:
         highlight_style = display_df.style.apply(highlight_top_nonzero, axis=0)
         st.write("### Rep Breakdown")
         st.dataframe(highlight_style.format("{:.2f}"), use_container_width=True)
+
+                # ----------------------------
+        # 💸 TEAM LEAD BONUS TRACKER
+        # ----------------------------
+        st.subheader("💸 Team Lead Bonus Tracker")
+
+        from datetime import datetime, timedelta
+        import math
+
+        # --- PAY CYCLE FUNCTION ---
+        def get_current_pay_cycle():
+            today = datetime.today().date()
+            base_date = datetime(2025, 7, 20).date()
+            days_since = (today - base_date).days
+            cycle_start = base_date + timedelta(days=(days_since // 14) * 14)
+            cycle_end = cycle_start + timedelta(days=13)
+            return cycle_start, cycle_end
+
+        cycle_start, cycle_end = get_current_pay_cycle()
+
+        # --- LOAD BONUS SHEET ---
+        tl_bonus_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=1302605632"
+        tl_bonus_df = pd.read_csv(tl_bonus_url)
+        tl_bonus_df.columns = tl_bonus_df.columns.str.strip()
+        tl_bonus_df['TL_clean'] = tl_bonus_df['Team Lead'].astype(str).str.strip().str.lower()
+        selected_lead_clean = selected_lead.strip().lower()
+
+        lead_bonus = tl_bonus_df[tl_bonus_df['TL_clean'] == selected_lead_clean]
+
+        if lead_bonus.empty:
+            st.warning(f"No bonus data found for: {selected_lead}")
+        else:
+            bonus_row = lead_bonus.iloc[0]
+
+            def parse_pct(val):
+                try:
+                    return float(str(val).replace('%', '').strip())
+                except:
+                    return 0
+
+            conversion = parse_pct(bonus_row['Conversion'])
+            attach = parse_pct(bonus_row['Attach'])
+            lt = parse_pct(bonus_row['LT'])
+            qa = parse_pct(bonus_row['QA'])
+
+            def check(val, threshold):
+                return "✅" if val >= threshold else "❌"
+
+            total_points = bonus_row.get("Total Points", "N/A")
+            tier = bonus_row.get("Tier", "N/A")
+            increase = bonus_row.get("Hourly Increase", "$0")
+
+            st.markdown(f"""
+            ### 📈 {selected_lead}'s Bonus Snapshot  
+            - **Conversion:** {conversion:.2f}% {check(conversion, 20)}  
+            - **All-In Attach:** {attach:.2f}% {check(attach, 25)}  
+            - **Lawn Treatment:** {lt:.2f}% {check(lt, 5.5)}  
+            - **QA:** {qa:.2f}% {check(qa, 80)}  
+            - **Total Points:** {total_points}  
+            - **Bonus Tier:** `{tier}`  
+            - **Hourly Increase:** **{increase}**
+            """)
+
+            # --- BONUS BLURB ---
+            try:
+                hourly_float = float(increase.replace("$", "").strip())
+            except:
+                hourly_float = 0
+
+            if hourly_float > 0:
+                estimated_hours = float(bonus_row.get("Hours Worked", 80))
+                bonus_total = hourly_float * estimated_hours
+                st.success(f"""
+                You're currently earning **${hourly_float:.2f}/hour**!  
+                With an estimated **{int(estimated_hours)} hours worked**, that's about **${bonus_total:.2f} extra this cycle!** 💸  
+                What will you spend your bonus on — a new mower or margarita pitcher? 😎
+                """)
+            else:
+                st.warning("No bonus just yet — but you’re not far! Let's mow down those goals:")
+
+            # --- GAP CALCULATION FROM HISTORY ---
+            st.markdown("### 🧠 What You Need to Hit Bonus Goals")
+
+            history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
+            cycle_df = history_df[
+                (history_df['Date'].dt.date >= cycle_start) &
+                (history_df['Date'].dt.date <= cycle_end) &
+                (history_df['Manager_Direct'].astype(str).str.strip().str.lower() == selected_lead_clean)
+            ].copy()
+
+            for col in ['Wins', 'Lawn Treatment', 'Leaf Removal', 'Mosquito', 'Flower Bed Weeding', 'Bush Trimming']:
+                cycle_df[col] = pd.to_numeric(cycle_df[col], errors='coerce').fillna(0)
+
+            cycle_wins = cycle_df['Wins'].sum()
+            cycle_lt = cycle_df['Lawn Treatment'].sum()
+            cycle_attaches = (
+                cycle_df['Lawn Treatment'] +
+                cycle_df['Leaf Removal'] +
+                cycle_df['Mosquito'] +
+                cycle_df['Flower Bed Weeding'] +
+                cycle_df['Bush Trimming']
+            ).sum()
+
+            lt_pct = (cycle_lt / cycle_wins) * 100 if cycle_wins > 0 else 0
+            attach_pct = (cycle_attaches / cycle_wins) * 100 if cycle_wins > 0 else 0
+
+            st.markdown(f"""
+            - 📦 **All-In Attach Rate:** `{attach_pct:.2f}%` {check(attach_pct, 25)}  
+            - 🍃 **Lawn Treatment Rate:** `{lt_pct:.2f}%` {check(lt_pct, 5.5)}
+            """)
+
+            # --- HOW MANY MORE TO GO ---
+            thresholds = {"Conversion": 20, "Attach": 25, "LT": 5.5, "QA": 80}
+            team_calls = float(bonus_row.get("Call #", 0))
+            team_wins = float(bonus_row.get("Win #", 0))
+            team_qa_scores = display_df['QA %']
+
+            needs = []
+
+            # 🏁 Conversion
+            actual_conversion = (team_wins / team_calls) * 100 if team_calls > 0 else 0
+            if actual_conversion < thresholds["Conversion"] - 0.001:
+                required_wins = (thresholds["Conversion"] / 100) * team_calls
+                more_wins_needed = math.ceil(required_wins - team_wins)
+                if more_wins_needed > 0:
+                    needs.append(f"🏁 **{more_wins_needed} more Wins** to reach 20% Conversion")
+
+            # 📦 Attach
+            if attach_pct < thresholds["Attach"]:
+                needed_attaches = math.ceil((thresholds["Attach"] / 100) * cycle_wins)
+                more_attaches_needed = max(0, needed_attaches - cycle_attaches)
+                needs.append(f"📦 **{more_attaches_needed} more Attaches** to hit 25% All-In Attach")
+
+            # 🍃 LT
+            if lt_pct < thresholds["LT"]:
+                needed_lt = math.ceil((thresholds["LT"] / 100) * cycle_wins)
+                more_lt_needed = max(0, needed_lt - cycle_lt)
+                needs.append(f"🌱 **{more_lt_needed} more Lawn Treatments** to reach 5.5% LT")
+
+            # ✅ QA
+            current_qa_avg = team_qa_scores[team_qa_scores > 0].mean()
+            if current_qa_avg < thresholds["QA"]:
+                num_agents = team_qa_scores.shape[0]
+                needed_qa_total = thresholds["QA"] * num_agents
+                current_qa_total = team_qa_scores.sum()
+                more_100s = math.ceil((needed_qa_total - current_qa_total) / (100 - thresholds["QA"]))
+                more_100s = max(1, more_100s)
+                needs.append(f"🎯 **{more_100s} more 100 QA scores** to average 80%")
+
+            if needs:
+                st.warning("You're not far! Here's what your team needs to meet **all 4 base goals** and cash in:")
+                for line in needs:
+                    st.markdown(f"- {line}")
+            else:
+                st.success("You’re crushing it — your team is currently hitting **all 4 base goals** 💪 Time to rake in that bonus! 🌿💸")
+
+            # --- BONUS BAR CHART ---
+            st.caption("Team Leads earn bonus pay based on their team's performance in 4 metrics. All base thresholds must be met to qualify.")
+            bonus_chart = pd.DataFrame({
+                "Metric": ["Conversion", "Attach", "LT", "QA"],
+                "Points": [
+                    int(bonus_row.get("Conversion Points", 0)) if str(bonus_row.get("Conversion Points", 0)).isdigit() else 0,
+                    int(bonus_row.get("Attach Points", 0)) if str(bonus_row.get("Attach Points", 0)).isdigit() else 0,
+                    int(bonus_row.get("LT Points", 0)) if str(bonus_row.get("LT Points", 0)).isdigit() else 0,
+                    int(bonus_row.get("QA Points", 0)) if str(bonus_row.get("QA Points", 0)).isdigit() else 0,
+                ]
+            })
+            st.bar_chart(bonus_chart.set_index("Metric"))
+
 
         # ---- SHOUTOUT GENERATOR ----
         st.subheader("📣 Shoutout Generator")
@@ -1312,6 +1555,8 @@ with tab5:
 
             st.dataframe(imp_df, use_container_width=True)
 
+                   # ----------------------------
+
     # 🎯 Most Improved Shoutout + Honorable Mentions
     shout_metrics = ['Conversion Change', 'LT Attach Change', 'All-In Attach Change']
     improvement_scores = []
@@ -1339,10 +1584,12 @@ with tab5:
             shout_text = " • ".join(shout_lines)
             st.markdown(f"🏅 **Honorable Mentions:** {shout_text}")
 
+  
+
+
 
         # Placeholder Sections
         st.subheader("🏆 Personal Bests (Coming Soon)")
-        st.subheader("💸 Bonus Tracker (Coming Soon)")
         st.subheader("⚔️ Compare With Another Team (Coming Soon)")
 
 
