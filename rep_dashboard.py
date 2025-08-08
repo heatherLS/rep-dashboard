@@ -892,7 +892,9 @@ with tab4:
     history_df['Date_str'] = history_df['Date'].dt.date.astype(str)  # ← compare from this
 
     available_dates = history_df['Date_str'].dropna().unique().tolist()
-   
+    st.write("Available snapshot dates:", available_dates)
+    st.write("Yesterday (target):", yesterday_str)
+
     # 🧠 Pure string comparison now
     if yesterday_str in available_dates:
         snapshot_date = pd.to_datetime(yesterday_str).date()
@@ -903,6 +905,10 @@ with tab4:
 
     # ✅ Filter with actual Date column (not string version)
     yesterday_df = history_df[history_df['Date'].dt.date == snapshot_date]
+
+
+
+
 
 
     # ✅ Get selected rep from session state
@@ -1207,14 +1213,7 @@ with tab5:
         your_team_attaches = team_df[['Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']].sum().sum()
         your_team_lt = team_df['Lawn Treatment'].sum()
 
-        top_conversion_rate = top_team["Conversion"] / 100
-        denominator = 1 - top_conversion_rate
-
-        if denominator <= 0:
-            needed_wins = 0
-        else:
-            needed_wins = max(0, math.ceil((top_conversion_rate * total_calls - total_wins) / denominator))
-
+        needed_wins = max(0, int(top_team["Total_Wins"] - total_wins))
         needed_attaches = max(0, int(top_team_attaches - your_team_attaches))
         needed_lt = max(0, int(top_team_lt - your_team_lt))
 
@@ -1268,7 +1267,7 @@ with tab5:
         st.write("### Rep Breakdown")
         st.dataframe(highlight_style.format("{:.2f}"), use_container_width=True)
 
-                # ----------------------------
+        # ----------------------------
         # 💸 TEAM LEAD BONUS TRACKER
         # ----------------------------
         st.subheader("💸 Team Lead Bonus Tracker")
@@ -1279,7 +1278,7 @@ with tab5:
         # --- PAY CYCLE FUNCTION ---
         def get_current_pay_cycle():
             today = datetime.today().date()
-            base_date = datetime(2025, 7, 20).date()
+            base_date = datetime(2025, 7, 20).date()  # Start of the first pay cycle
             days_since = (today - base_date).days
             cycle_start = base_date + timedelta(days=(days_since // 14) * 14)
             cycle_end = cycle_start + timedelta(days=13)
@@ -1291,9 +1290,10 @@ with tab5:
         tl_bonus_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=1302605632"
         tl_bonus_df = pd.read_csv(tl_bonus_url)
         tl_bonus_df.columns = tl_bonus_df.columns.str.strip()
+
+        # --- CLEAN + SELECT ---
         tl_bonus_df['TL_clean'] = tl_bonus_df['Team Lead'].astype(str).str.strip().str.lower()
         selected_lead_clean = selected_lead.strip().lower()
-
         lead_bonus = tl_bonus_df[tl_bonus_df['TL_clean'] == selected_lead_clean]
 
         if lead_bonus.empty:
@@ -1311,13 +1311,12 @@ with tab5:
             attach = parse_pct(bonus_row['Attach'])
             lt = parse_pct(bonus_row['LT'])
             qa = parse_pct(bonus_row['QA'])
+            total_points = int(bonus_row['Total Points']) if str(bonus_row['Total Points']).isdigit() else 0
+            tier = str(bonus_row['Bonus Tier']).strip()
+            increase = str(bonus_row['$ Increase']).strip()
 
             def check(val, threshold):
                 return "✅" if val >= threshold else "❌"
-
-            total_points = bonus_row.get("Total Points", "N/A")
-            tier = bonus_row.get("Tier", "N/A")
-            increase = bonus_row.get("Hourly Increase", "$0")
 
             st.markdown(f"""
             ### 📈 {selected_lead}'s Bonus Snapshot  
@@ -1331,6 +1330,7 @@ with tab5:
             """)
 
             # --- BONUS BLURB ---
+
             try:
                 hourly_float = float(increase.replace("$", "").strip())
             except:
@@ -1339,16 +1339,18 @@ with tab5:
             if hourly_float > 0:
                 estimated_hours = float(bonus_row.get("Hours Worked", 80))
                 bonus_total = hourly_float * estimated_hours
-                st.success(f"""
-                You're currently earning **${hourly_float:.2f}/hour**!  
-                With an estimated **{int(estimated_hours)} hours worked**, that's about **${bonus_total:.2f} extra this cycle!** 💸  
-                What will you spend your bonus on — a new mower or margarita pitcher? 😎
-                """)
+
+                st.markdown("### 🌟 Bonus ")
+                st.success(f"You're currently earning **${hourly_float:.2f}/hour**!")
+                st.markdown(f"With an estimated **{int(estimated_hours)} hours worked**, that's about **${bonus_total:.2f} extra this cycle!** 💸")
+                st.markdown("What will you spend your bonus on — a new mower or margarita pitcher? 😎")
+
             else:
                 st.warning("No bonus just yet — but you’re not far! Let's mow down those goals:")
 
-            # --- GAP CALCULATION FROM HISTORY ---
-            st.markdown("### 🧠 What You Need to Hit Bonus Goals")
+
+            # --- HISTORY SHEET CALC ---
+            st.markdown("### 🧠 What You Need to Hit Bonus Goals based on google form attach entries")
 
             history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
             cycle_df = history_df[
@@ -1357,9 +1359,11 @@ with tab5:
                 (history_df['Manager_Direct'].astype(str).str.strip().str.lower() == selected_lead_clean)
             ].copy()
 
+            # Clean numeric columns
             for col in ['Wins', 'Lawn Treatment', 'Leaf Removal', 'Mosquito', 'Flower Bed Weeding', 'Bush Trimming']:
                 cycle_df[col] = pd.to_numeric(cycle_df[col], errors='coerce').fillna(0)
 
+            # Totals
             cycle_wins = cycle_df['Wins'].sum()
             cycle_lt = cycle_df['Lawn Treatment'].sum()
             cycle_attaches = (
@@ -1374,11 +1378,11 @@ with tab5:
             attach_pct = (cycle_attaches / cycle_wins) * 100 if cycle_wins > 0 else 0
 
             st.markdown(f"""
-            - 📦 **All-In Attach Rate:** `{attach_pct:.2f}%` {check(attach_pct, 25)}  
+            - 📦 **All-In Attach Rate:** `{attach_pct:.2f}%` {check(attach_pct, 25)}
             - 🍃 **Lawn Treatment Rate:** `{lt_pct:.2f}%` {check(lt_pct, 5.5)}
             """)
 
-            # --- HOW MANY MORE TO GO ---
+            # --- THRESHOLDS + NEEDS ---
             thresholds = {"Conversion": 20, "Attach": 25, "LT": 5.5, "QA": 80}
             team_calls = float(bonus_row.get("Call #", 0))
             team_wins = float(bonus_row.get("Win #", 0))
@@ -1386,13 +1390,13 @@ with tab5:
 
             needs = []
 
-            # 🏁 Conversion
+            # 🏎️ Conversion
             actual_conversion = (team_wins / team_calls) * 100 if team_calls > 0 else 0
             if actual_conversion < thresholds["Conversion"] - 0.001:
                 required_wins = (thresholds["Conversion"] / 100) * team_calls
                 more_wins_needed = math.ceil(required_wins - team_wins)
                 if more_wins_needed > 0:
-                    needs.append(f"🏁 **{more_wins_needed} more Wins** to reach 20% Conversion")
+                    needs.append(f"🏎️ **{more_wins_needed} more Wins** to reach 20% Conversion")
 
             # 📦 Attach
             if attach_pct < thresholds["Attach"]:
@@ -1423,19 +1427,8 @@ with tab5:
             else:
                 st.success("You’re crushing it — your team is currently hitting **all 4 base goals** 💪 Time to rake in that bonus! 🌿💸")
 
-            # --- BONUS BAR CHART ---
+        # --- POINT CHART ---
             st.caption("Team Leads earn bonus pay based on their team's performance in 4 metrics. All base thresholds must be met to qualify.")
-            bonus_chart = pd.DataFrame({
-                "Metric": ["Conversion", "Attach", "LT", "QA"],
-                "Points": [
-                    int(bonus_row.get("Conversion Points", 0)) if str(bonus_row.get("Conversion Points", 0)).isdigit() else 0,
-                    int(bonus_row.get("Attach Points", 0)) if str(bonus_row.get("Attach Points", 0)).isdigit() else 0,
-                    int(bonus_row.get("LT Points", 0)) if str(bonus_row.get("LT Points", 0)).isdigit() else 0,
-                    int(bonus_row.get("QA Points", 0)) if str(bonus_row.get("QA Points", 0)).isdigit() else 0,
-                ]
-            })
-            st.bar_chart(bonus_chart.set_index("Metric"))
-
 
         # ---- SHOUTOUT GENERATOR ----
         st.subheader("📣 Shoutout Generator")
