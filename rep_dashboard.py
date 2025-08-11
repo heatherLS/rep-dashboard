@@ -20,20 +20,17 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Leaderboard", "🧮 Calculator", "
 sheet_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=171451260"
 
 history_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=303010891"
-@st.cache_data(ttl=86400)
-def load_history():
+@st.cache_data(show_spinner=False)
+def load_history(_cache_bust_key: str):
     df = pd.read_csv(history_url, header=1)
-
     # 🧼 Remove mid-sheet header rows
     df = df[df['Date'].astype(str).str.lower() != 'date']
-
     # ✅ Keep only rows that have valid reps
     df = df[df['Rep'].notna()]
-
     # 📅 Convert 'Date' to datetime
     df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-
     return df
+
 
 
 
@@ -53,6 +50,109 @@ def show_yesterday_service_top(df, column_name, emoji, title):
     for _, row in leaderboard.iterrows():
         st.markdown(f"<div style='text-align: center;'>{row['Full_Name']} — {int(row[column_name])}</div>", unsafe_allow_html=True)
 
+# ---------- RECORDS & WEEK CHAMPIONS HELPERS ----------
+from pytz import timezone
+eastern = timezone('US/Eastern')
+
+def clean_numeric(df, cols):
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+    return df
+
+def get_records_to_beat(history_df):
+    """
+    Highest single-day totals across the entire history for:
+    Wins + each attach service.
+    Returns a list of dicts with metric, value, full_name, team, date.
+    """
+    metrics = ['Wins', 'Lawn Treatment', 'Bush Trimming', 'Mosquito', 'Flower Bed Weeding', 'Leaf Removal']
+    history_df = history_df.copy()
+    history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
+    history_df = clean_numeric(history_df, metrics)
+
+    out = []
+    for m in metrics:
+        if m not in history_df.columns or history_df[m].max() == 0:
+            continue
+        idx = history_df[m].idxmax()
+        row = history_df.loc[idx]
+        full_name = f"{str(row.get('First_Name','')).strip()} {str(row.get('Last_Name','')).strip()}".strip() or str(row.get('Rep','Unknown'))
+        out.append({
+            "metric": m,
+            "value": int(row[m]),
+            "full_name": full_name,
+            "team": str(row.get('Team Name', 'Unknown')),
+            "date": row['Date'].date() if pd.notna(row['Date']) else None
+        })
+    return out
+
+def get_last_week_range():
+    """
+    Returns the last fully completed Sunday–Saturday week.
+    Example if today is 2025-08-11 (Mon):
+      -> start = 2025-08-03 (Sun), end = 2025-08-09 (Sat)
+    """
+    today = datetime.now(eastern).date()
+    yesterday = today - timedelta(days=1)
+
+    # Saturday is 5 where Monday=0..Sunday=6
+    days_back_to_sat = (yesterday.weekday() - 5) % 7
+    end = yesterday - timedelta(days=days_back_to_sat)   # most recent Saturday strictly before today
+    start = end - timedelta(days=6)                      # previous Sunday
+    return start, end
+
+
+
+def get_last_week_champions(history_df, min_calls_team=50, min_calls_rep=10):
+    """
+    Returns:
+      - top_team_by_conversion: (team_name, conv_pct, wins, calls)
+      - top_reps_by_wins: DataFrame of top 3 reps by wins last week
+    """
+    start, end = get_last_week_range()
+    df = history_df.copy()
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    df = df[(df['Date'].dt.date >= start) & (df['Date'].dt.date <= end)].copy()
+
+    # Clean
+    df = clean_numeric(df, ['Calls','Wins','Lawn Treatment','Bush Trimming','Mosquito','Flower Bed Weeding','Leaf Removal'])
+
+    # Teams
+    team_totals = df.groupby('Team Name', dropna=False).agg(
+        Calls=('Calls','sum'),
+        Wins=('Wins','sum')
+    ).reset_index()
+    if not team_totals.empty:
+        team_totals['Conversion'] = (team_totals['Wins'] / team_totals['Calls'].replace(0, pd.NA)) * 100
+        # threshold to avoid tiny-sample flukes
+        team_totals = team_totals[team_totals['Calls'] >= min_calls_team]
+        top_team = None
+        if not team_totals.empty:
+            top_row = team_totals.sort_values('Conversion', ascending=False).iloc[0]
+            top_team = (top_row['Team Name'], float(top_row['Conversion']), int(top_row['Wins']), int(top_row['Calls']))
+        else:
+            top_team = None
+    else:
+        top_team = None
+
+    # Reps — rank by CONVERSION, require a calls minimum
+    rep_totals = df.groupby(['Rep','First_Name','Last_Name','Team Name'], dropna=False).agg(
+        Wins=('Wins','sum'),
+        Calls=('Calls','sum')
+    ).reset_index()
+    if not rep_totals.empty:
+        rep_totals = rep_totals[rep_totals['Calls'] >= min_calls_rep].copy()
+        rep_totals['Conversion'] = (rep_totals['Wins'] / rep_totals['Calls'].replace(0, pd.NA)) * 100
+        top_reps = rep_totals.sort_values('Conversion', ascending=False).head(3).copy()
+        top_reps['Full_Name'] = (top_reps['First_Name'].astype(str).str.strip() + ' ' + top_reps['Last_Name'].astype(str).str.strip()).str.strip()
+        top_reps['Full_Name'] = top_reps.apply(lambda r: r['Full_Name'] if r['Full_Name'] else str(r['Rep']), axis=1)
+    else:
+        top_reps = pd.DataFrame(columns=['Full_Name','Wins','Calls','Team Name','Conversion'])
+
+    return top_team, top_reps[['Full_Name','Conversion','Wins','Calls','Team Name']]
+
+
 
 with tab1:
     st.markdown("<h1 style='text-align: center;'>📊 Conversion Rate Leaderboard</h1>", unsafe_allow_html=True)
@@ -64,6 +164,12 @@ with tab1:
 
     # 🧹 Clean headers and strip spaces
     df.columns = df.columns.str.strip()
+
+    # Pull fresh history for records/champions
+    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H')
+    history_df = load_history(cache_bust_key)
+    history_df.columns = history_df.columns.str.strip()
+
 
     # 🎂 Handle Birthdays
     if 'Birthday' in df.columns:
@@ -82,10 +188,12 @@ with tab1:
     bdays_today = df[df['Birthday_MD'].dt.strftime('%m-%d') == today_md]
 
     for _, row in bdays_today.iterrows():
+        full_name = f"{row['First_Name']} {row['Last_Name']}".strip()
         st.markdown(
-            f"<div style='text-align: center; color: orange; font-size: 20px;'>🌼🎉 Happy Birthday, {row['First_Name']}! 🎉🌼</div>",
+            f"<div style='text-align: center; color: orange; font-size: 20px;'>🌼🎉 Happy Birthday, {full_name}! 🎉🌼</div>",
             unsafe_allow_html=True
         )
+
 
     # 🗓 Handle Anniversaries
     if 'Start Date' in df.columns:
@@ -94,10 +202,12 @@ with tab1:
 
         for _, row in anniv_today.iterrows():
             years = today.year - row['Start Date'].year
+            full_name = f"{row['First_Name']} {row['Last_Name']}".strip()
             st.markdown(
-                f"<div style='text-align: center; color: teal; font-size: 20px;'>🥳🎉 Happy {years}-year Anniversary, {row['First_Name']}! 🎉🥳</div>",
+                f"<div style='text-align: center; color: teal; font-size: 20px;'>🥳🎉 Happy {years}-year Anniversary, {full_name}! 🎉🥳</div>",
                 unsafe_allow_html=True
             )
+
 
 
     # ✅ Convert Calls to numeric and keep everyone for rep selection
@@ -114,7 +224,9 @@ with tab1:
     df['Wins'] = pd.to_numeric(df['Wins'], errors='coerce').fillna(0)
     double_digit_celebs = df[df['Wins'] >= 10]
     if not double_digit_celebs.empty:
-        names = ", ".join(double_digit_celebs['First_Name'].tolist())
+        names = ", ".join(
+            (double_digit_celebs['First_Name'] + " " + double_digit_celebs['Last_Name']).str.strip().tolist()
+)
         st.markdown(
             f"<div style='text-align: center; color: purple; font-size: 22px; font-weight: bold;'>🎉 DOUBLE DIGITS CLUB: {names} {'has' if len(double_digit_celebs)==1 else 'have'} crushed 10+ wins today!</div>",
             unsafe_allow_html=True
@@ -131,6 +243,68 @@ with tab1:
     active_df = df[df['Calls'] >= 1]
     user_data = df[df[rep_col] == user]
     first_name = user_data['First_Name'].values[0] if not user_data.empty else "Rep"
+
+    # --------------------------------------------
+    # 🏆 Records to Beat (All-Time Single-Day Highs)
+    # --------------------------------------------
+    records = get_records_to_beat(history_df)
+
+    if records:
+        st.markdown("<h2 style='text-align:center;'>🏆 Records to Beat (All-Time Single-Day Highs)</h2>", unsafe_allow_html=True)
+        cols = st.columns(min(3, len(records)))
+        for i, rec in enumerate(records):
+            with cols[i % len(cols)]:
+                date_str = rec['date'].strftime('%b %d, %Y') if rec['date'] else '—'
+                st.markdown(f"""
+                <div style='text-align:center; padding:14px; border:1px solid #ddd; border-radius:12px; margin-bottom:12px;'>
+                    <div style='font-size:18px; font-weight:700;'>{rec['metric']}</div>
+                    <div style='font-size:36px; font-weight:800; margin:6px 0;'>{rec['value']}</div>
+                    <div style='font-size:14px; opacity:0.9;'>{rec['full_name']}</div>
+                    <div style='font-size:12px; opacity:0.7;'>{rec['team']}</div>
+                    <div style='font-size:12px; opacity:0.7;'>on {date_str}</div>
+                    <div style='margin-top:8px; font-size:13px;'>🔥 Number to beat!</div>
+                </div>
+                """, unsafe_allow_html=True)
+    else:
+        st.info("No historical records found yet — go set the bar! 🔥")
+
+    # --------------------------------------------
+    # 👑 Last Week Champions (Mon–Sun ending yesterday)
+    # --------------------------------------------
+    top_team, top_reps = get_last_week_champions(history_df)
+
+    st.markdown("<h2 style='text-align:center;'>👑 Last Week Champions</h2>", unsafe_allow_html=True)
+
+    # Team crown
+    if top_team:
+        team_name, conv, wins, calls = top_team
+        st.markdown(f"""
+        <div style='text-align:center; padding:14px; border:2px solid #222; border-radius:12px; margin-bottom:14px;'>
+            <div style='font-size:18px; font-weight:700;'>🥇 Top Team by Conversion</div>
+            <div style='font-size:24px; font-weight:800; margin:6px 0;'>{team_name}</div>
+            <div style='font-size:14px;'>🎯 {conv:.2f}% — {wins} wins / {calls} calls</div>
+            <div style='font-size:12px; opacity:0.7;'>Minimum calls threshold applied</div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info("No qualifying team last week (not enough calls).")
+
+    # Top reps last week by CONVERSION (with wins/calls shown)
+    if not top_reps.empty:
+        st.markdown("<div style='text-align:center; font-weight:700; font-size:18px;'>🏅 Top Reps by Conversion (Last Week)</div>", unsafe_allow_html=True)
+        cols = st.columns(min(3, len(top_reps)))
+        for i, (_, r) in enumerate(top_reps.iterrows()):
+            with cols[i % len(cols)]:
+                st.markdown(f"""
+                <div style='text-align:center; padding:12px; border:1px solid #ddd; border-radius:12px; margin-top:8px;'>
+                    <div style='font-size:18px; font-weight:700;'>{r['Full_Name']}</div>
+                    <div style='font-size:14px; opacity:0.9;'>{r['Team Name']}</div>
+                    <div style='font-size:20px; font-weight:800; margin-top:6px;'>🎯 {r['Conversion']:.2f}% conversion</div>
+                    <div style='font-size:12px; opacity:0.7;'>🏆 {int(r['Wins'])} wins • {int(r['Calls'])} calls</div>
+                </div>
+                """, unsafe_allow_html=True)
+    else:
+        st.info("No qualifying reps last week (not enough calls).")
 
 
     # Your current leaderboard, shoutouts, and top 3 service blocks here...
@@ -876,8 +1050,13 @@ with tab3:
 with tab4:
     st.markdown("<h1 style='text-align: center;'>📅 Yesterday's Leaderboard</h1>", unsafe_allow_html=True)
 
-    history_df = load_history()
+    from pytz import timezone
+    eastern = timezone('US/Eastern')
+    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H')  # refreshes hourly
+
+    history_df = load_history(cache_bust_key)
     history_df.columns = history_df.columns.str.strip()
+
 
    
     # 🧠 Yesterday = actual performance day
@@ -892,8 +1071,7 @@ with tab4:
     history_df['Date_str'] = history_df['Date'].dt.date.astype(str)  # ← compare from this
 
     available_dates = history_df['Date_str'].dropna().unique().tolist()
-    st.write("Available snapshot dates:", available_dates)
-    st.write("Yesterday (target):", yesterday_str)
+    
 
     # 🧠 Pure string comparison now
     if yesterday_str in available_dates:
@@ -1119,7 +1297,13 @@ with tab4:
 with tab5:
 
     df = load_data()
-    history_df = load_history()
+
+    from pytz import timezone
+    eastern = timezone('US/Eastern')
+    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H')  # refreshes hourly
+
+    history_df = load_history(cache_bust_key)
+
 
     # ---- SELECT TEAM LEAD ----
     manager_directs = df['Manager_Direct'].dropna().unique()
