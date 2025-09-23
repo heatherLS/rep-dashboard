@@ -832,6 +832,10 @@ with tab1:
 
 
     # 📈 Your team info
+    needed_wins = 0
+    needed_attaches = 0
+    needed_lt = 0
+
 
     your_team_row_df = team_totals[team_totals["Team Name"] == team_name]
 
@@ -870,7 +874,7 @@ with tab1:
             <div style='text-align: center; font-size: 18px; margin-top: 10px; padding: 10px; border-radius: 8px;
                         background-color: #f0f0f0; color: #333; border: 1px solid #ccc;'>
                 <b>Can your team take the top spot?</b><br><br>
-                🏆 Top Team: <b>{top_team["Team Name"]}</b><br>
+                🏆 Top Team: <b>{getattr(top_team, "Team Name", getattr(top_team, "Team_Name", "Unknown"))}</b><br>
                 💪 Your Team: <b>{team_name}</b><br><br>
                 Your team needs:<br>
                 • <b>{needed_wins} more wins</b><br>
@@ -889,9 +893,9 @@ with tab1:
 
         st.markdown(f"""
         <div style='text-align: center; font-size: 18px; margin-top: 10px; padding: 10px; border-radius: 8px;
-                    background-color: rgba(255, 255, 255, 0.05); color: #f9f9f9; border: 1px solid #444;'>
+                    background-color: rgba(255, 255, 255, 0.05); color: #222; border: 1px solid #444;'>
             <b>Can your team take the top spot?</b><br><br>
-            🏆 Top Team: <b>{top_team["Team Name"]}</b><br>
+            🏆 Top Team: <b>{getattr(top_team, "Team Name", getattr(top_team, "Team_Name", "Unknown"))}</b><br>
             💪 Your Team: <b>{team_name}</b><br><br>
             Your team needs:<br>
             • <b>{needed_wins} more wins</b><br>
@@ -1013,7 +1017,7 @@ with tab1:
     lt_display = lt_leaderboard[['Rank', 'Rep Name', 'Lawn Treatment', 'Bush Trimming', 'Mosquito', 'Flower Bed Weeding', 'Leaf Removal', 'Team_Logo']]
     lt_display.columns = ['Rank', 'Rep Name', 'Lawn Treatment', 'Bush Trimming', 'Mosquito', 'Flower Bed Weeding', 'Leaf Removal', 'Team Logo']
 
-    st.markdown("<h2 style='text-align: center;'>🌱 Full LT Leaderboard</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center;'>🌱 Full Attach Leaderboard</h2>", unsafe_allow_html=True)
     st.markdown(lt_display.to_html(escape=False, index=False), unsafe_allow_html=True)
 
     # Center the table visually
@@ -1923,10 +1927,14 @@ with tab5:
             if hourly_float > 0:
                 estimated_hours = float(bonus_row.get("Hours Worked", 80))
                 bonus_total = hourly_float * estimated_hours
+                import math
+                hours_display = int(estimated_hours) if isinstance(estimated_hours, (int, float)) and not math.isnan(estimated_hours) else 80
+                bonus_total_safe = hourly_float * hours_display
+
 
                 st.markdown("### 🌟 Bonus ")
                 st.success(f"You're currently earning **${hourly_float:.2f}/hour**!")
-                st.markdown(f"With an estimated **{int(estimated_hours)} hours worked**, that's about **${bonus_total:.2f} extra this cycle!** 💸")
+                st.markdown(f"With an estimated **{hours_display} hours worked**, that's about **${bonus_total_safe:.2f} extra this cycle!** 💸")
                 st.markdown("What will you spend your bonus on — a new mower or margarita pitcher? 😎")
 
             else:
