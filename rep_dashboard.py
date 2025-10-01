@@ -332,6 +332,117 @@ def get_last_week_champions(history_df, min_calls_team=50, min_calls_rep=10):
 
     return top_team, top_reps[['Full_Name','Conversion','Wins','Calls','Team Name']]
 
+# =========================
+# IQ PANELS + POOL BANNER
+# =========================
+import pandas as pd
+from datetime import timezone
+
+# Map "display name" → (sheet column name, emoji)
+IQ_MAP = [
+    ("Lawn Treatment",                 "Lawn Treatment",                 "🌱"),
+    ("Bushes",                         "Bush Trimming",                  "🌳"),  # sheet uses Bush Trimming
+    ("Mosquito",                       "Mosquito",                       "🦟"),
+    ("Flower Bed Weeding",             "Flower Bed Weeding",             "🌸"),
+    ("Leaf Removal",                   "Leaf Removal",                   "🍂"),
+    ("Overseeding and Aeration IQ",    "Overseeding and Aeration IQ",    "🌾"),
+    ("Lime Treatment",                 "Lime Treatment",                 "🍋"),
+    ("Disease Fungicide",              "Disease Fungicide",              "🧫"),
+    ("Pool",                           "Pool",                           "🏊"),
+]
+
+CORE_IQS = [
+    "Lawn Treatment", "Bushes", "Mosquito", "Flower Bed Weeding", "Leaf Removal"
+]
+SPECIALTY_IQS = [
+    "Overseeding and Aeration IQ", "Lime Treatment", "Disease Fungicide", "Pool"
+]
+
+TOP_N_PER_IQ = 5  # show top N reps per card
+
+def _nice_card(title: str, icon: str, body_md: str):
+    st.markdown(
+        f"""
+        <div style="
+            border:1px solid rgba(0,0,0,0.08);
+            padding:14px;
+            border-radius:16px;
+            box-shadow:0 2px 10px rgba(0,0,0,0.10);
+            min-height:140px;
+        ">
+            <div style="font-weight:700;font-size:16px;margin-bottom:8px;">{icon} {title}</div>
+            <div style="line-height:1.6;">{body_md}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+def _render_single_iq_card(df: pd.DataFrame, display_name: str, col_name: str, icon: str):
+    """Show top sellers for one IQ (hide if col missing or all zeros)."""
+    if col_name not in df.columns:
+        return
+    d = df[['Full_Name', col_name]].copy()
+    d[col_name] = pd.to_numeric(d[col_name], errors='coerce').fillna(0)
+    d = d[d[col_name] > 0].sort_values(col_name, ascending=False)
+    if d.empty:
+        # For Pool specifically, show a nudge if no sales yet
+        if display_name == "Pool":
+            _nice_card(display_name, icon, "_No sales yet — be the first to make a splash!_")
+        return
+    lines = [f"• <b>{r['Full_Name']}</b> — {int(r[col_name])}" for _, r in d.head(TOP_N_PER_IQ).iterrows()]
+    _nice_card(display_name, icon, "<br>".join(lines))
+
+def _render_iq_row(df: pd.DataFrame, title: str, which_list: list[str]):
+    st.markdown(f"#### {title}")
+    cols = st.columns(4)
+    # keep order defined in which_list but skip missing/zero panels automatically
+    name_to_meta = {n: (c, e) for n, c, e in IQ_MAP}
+    i = 0
+    for name in which_list:
+        if name not in name_to_meta: 
+            continue
+        col_name, emoji = name_to_meta[name]
+        with cols[i % 4]:
+            _render_single_iq_card(df, name, col_name, emoji)
+        i += 1
+
+def render_all_iq_panels(df: pd.DataFrame, collapsible_specialty: bool = False):
+    """Two tidy rows of IQ cards, auto-hiding zeroes."""
+    st.markdown("### 🧩 Instant Quotes (IQ) Wins")
+    _render_iq_row(df, "🔥 Top IQ Sellers", CORE_IQS)
+    if collapsible_specialty:
+        with st.expander("🌱 Specialty IQs (click to expand)", expanded=False):
+            _render_iq_row(df, "", SPECIALTY_IQS)
+    else:
+        _render_iq_row(df, "🌱 Specialty IQs", SPECIALTY_IQS)
+    st.caption("Only reps with >0 per IQ are shown. Panels auto-hide if no sales.")
+
+def render_pool_splash_banners(df: pd.DataFrame):
+    """Banner every time someone has ≥1 Pool sale (simple, no events stream needed)."""
+    if "Pool" not in df.columns:
+        return
+    tmp = df[['Full_Name', 'Pool']].copy()
+    tmp['Pool'] = pd.to_numeric(tmp['Pool'], errors='coerce').fillna(0)
+    tmp = tmp[tmp['Pool'] > 0].sort_values('Pool', ascending=False)
+    if tmp.empty:
+        return
+    for _, r in tmp.iterrows():
+        st.markdown(
+            f"""
+            <div style="
+                border-left:6px solid #06b6d4;
+                background:rgba(6,182,212,0.10);
+                padding:12px 14px;
+                border-radius:12px;
+                margin-bottom:10px;
+                font-size:16px;
+            ">
+                🏊 <b>SPLASH ALERT!</b> <b>{r['Full_Name']}</b> sold a <b>Pool</b> IQ!
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        st.balloons()
 
 
 with tab1:
@@ -411,6 +522,9 @@ with tab1:
             f"<div style='text-align: center; color: purple; font-size: 22px; font-weight: bold;'>🎉 DOUBLE DIGITS CLUB: {names} {'has' if len(double_digit_celebs)==1 else 'have'} crushed 10+ wins today!</div>",
             unsafe_allow_html=True
         )
+
+    # 🏊 Pool splash shoutouts at the very top
+    render_pool_splash_banners(df)
 
     all_reps = sorted(df[rep_col].dropna().unique())
     all_reps.insert(0, "🔍 Select your name")
@@ -963,84 +1077,8 @@ with tab1:
         </style>
         """, unsafe_allow_html=True)
 
-# Show additional service leaderboards side-by-side
-    # ✅ Ensure 'Team_Logo' exists before showing service leaderboards
-    if 'Team_Logo' not in df.columns:
-        df['Team Name'] = df['Team Name'].astype(str)
-        df['Team_Logo'] = df['Team Name'].apply(
-            lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='40'>" if pd.notna(name) else ""
-        )
-
-    # Show additional service leaderboards side-by-side
-    col1, col2, col3, col4, col5 = st.columns(5)
-
-    with col1:
-        show_service_leaderboard(df[df['Calls'] >= 1], 'Lawn Treatment', '🌱', 'Lawn Treatment')
-
-    with col2:
-        show_service_leaderboard(df[df['Calls'] >= 1], 'Bush Trimming', '🌳', 'Bush Trim')
-
-    with col3:
-        show_service_leaderboard(df[df['Calls'] >= 1], 'Mosquito', '🦟', 'Mosquito')
-
-    with col4:
-        show_service_leaderboard(df[df['Calls'] >= 1], 'Flower Bed Weeding', '🌸', 'Flower Bed Weeding')
-
-    with col5:
-        show_service_leaderboard(df[df['Calls'] >= 1], 'Leaf Removal', '🍂', 'Leaf Removal')
-
-
-    # 🍃 Full LT Leaderboard with additional services
-    if 'Lawn Treatment' in df.columns:
-        df['Lawn Treatment'] = pd.to_numeric(df['Lawn Treatment'], errors='coerce').fillna(0)
-        df['Bush Trimming'] = pd.to_numeric(df.get('Bush Trimming', 0), errors='coerce').fillna(0)
-        df['Mosquito'] = pd.to_numeric(df.get('Mosquito', 0), errors='coerce').fillna(0)
-        df['Flower Bed Weeding'] = pd.to_numeric(df.get('Flower Bed Weeding', 0), errors='coerce').fillna(0)
-        df['Leaf Removal'] = pd.to_numeric(df.get('Leaf Removal', 0), errors='coerce').fillna(0)
-
-        if 'Team_Logo' not in df.columns:
-            df['Team_Logo'] = df['Team Name'].astype(str).apply(
-                lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='30'>" if pd.notna(name) else ""
-            )
-
-        lt_leaderboard = df[df['Calls'] >= 1].copy()
-        lt_leaderboard = lt_leaderboard.sort_values(by='Lawn Treatment', ascending=False).reset_index(drop=True)
-        lt_leaderboard['Rank'] = lt_leaderboard.index + 1
-
-    # Use First and Last Name instead of email
-    lt_leaderboard['Rep Name'] = lt_leaderboard.apply(
-        lambda row: f"{row.get('First_Name', '')} {row.get('Last_Name', '')}".strip()
-        if row.get('First_Name') or row.get('Last_Name') else row.get('Rep', 'Unknown'), axis=1
-    )
-
-    # Select and rename columns for display
-    lt_display = lt_leaderboard[['Rank', 'Rep Name', 'Lawn Treatment', 'Bush Trimming', 'Mosquito', 'Flower Bed Weeding', 'Leaf Removal', 'Team_Logo']]
-    lt_display.columns = ['Rank', 'Rep Name', 'Lawn Treatment', 'Bush Trimming', 'Mosquito', 'Flower Bed Weeding', 'Leaf Removal', 'Team Logo']
-
-    st.markdown("<h2 style='text-align: center;'>🌱 Full Attach Leaderboard</h2>", unsafe_allow_html=True)
-    st.markdown(lt_display.to_html(escape=False, index=False), unsafe_allow_html=True)
-
-    # Center the table visually
-    st.markdown("""
-    <style>
-    table td, table th {
-        text-align: center !important;
-        vertical-align: middle;
-    }
-    table {
-        margin-left: auto;
-        margin-right: auto;
-        border-collapse: collapse;
-        width: 90%;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.15);
-    }
-    th {
-        background-color: #333;
-        color: white;
-        font-weight: bold;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    # 🧩 Instant Quote Leaderboards (replacing the old service leaderboards section)
+    render_all_iq_panels(df, collapsible_specialty=False)  # set True if you want the second row collapsed
 
 
 # --------------------------------------------
