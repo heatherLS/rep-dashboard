@@ -536,7 +536,14 @@ with tab1:
 
     active_df = df[df['Calls'] >= 1]
     user_data = df[df[rep_col] == user]
-    first_name = user_data['First_Name'].values[0] if not user_data.empty else "Rep"
+    # user_data should be the filtered df for the selected rep
+    if user_data is None or user_data.empty:
+        first_name = (selected_rep or "").split()[0] if selected_rep else "Rep"
+    else:
+        if "First_Name" in user_data.columns and user_data["First_Name"].notna().any():
+            first_name = str(user_data["First_Name"].dropna().iloc[0]).strip()
+        else:
+            first_name = str(selected_rep).split()[0] if selected_rep else "Rep"
 
     # --------------------------------------------
     # 🏆 Records to Beat (All-Time Single-Day Highs)
