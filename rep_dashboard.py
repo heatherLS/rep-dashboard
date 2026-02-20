@@ -1721,10 +1721,19 @@ with tab5:
         }
 
     base_goals = load_base_goals(BONUS_SHEET_URL)
-    BASE_CONV   = base_goals.get("Conversion", 20.0)
-    BASE_ATTACH = base_goals.get("Attach", 25.0)
-    BASE_LT     = base_goals.get("LT", 5.5)
-    BASE_QA     = base_goals.get("QA", 80.0)
+    def coalesce_num(x, fallback):
+        try:
+            if x is None:
+                return fallback
+            if isinstance(x, float) and np.isnan(x):
+                return fallback
+            return float(x)
+        except Exception:
+        r    eturn fallback
+    BASE_CONV   = coalesce_num(base_goals.get("Conversion"), 20.0)
+    BASE_ATTACH = coalesce_num(base_goals.get("Attach"), 25.0)
+    BASE_LT     = coalesce_num(base_goals.get("LT"), 5.5)
+    BASE_QA     = coalesce_num(base_goals.get("QA"), 80.0)
 
     # ---- SELECT TEAM LEAD ----
     manager_directs = df['Manager_Direct'].dropna().unique()
