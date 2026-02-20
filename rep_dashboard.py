@@ -1729,7 +1729,7 @@ with tab5:
                 return fallback
             return float(x)
         except Exception:
-        r    eturn fallback
+            return fallback
     BASE_CONV   = coalesce_num(base_goals.get("Conversion"), 20.0)
     BASE_ATTACH = coalesce_num(base_goals.get("Attach"), 25.0)
     BASE_LT     = coalesce_num(base_goals.get("LT"), 5.5)
