@@ -1,4 +1,7 @@
 streamlit
 pandas
 streamlit-autorefresh
+psycopg2-binary
+pytz
+Authlib>=1.3.2
 

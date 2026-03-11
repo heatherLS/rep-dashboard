@@ -7,22 +7,157 @@ from streamlit_autorefresh import st_autorefresh
 import streamlit.components.v1 as components
 from datetime import datetime, timedelta
 
-# ⛔️ TEMP: neutralize st.stop() so other tabs can't kill the run
-if "SOFT_STOP_PATCHED" not in st.session_state:
-    def _soft_stop():
-        # show a minimal warning but DO NOT stop the app
-        st.caption("⚠️ Another tab requested stop; ignoring so the app keeps running (demo mode).")
-        return
-    try:
-        import streamlit as _st  # local alias just in case
-        _st.stop = _soft_stop
-    except Exception:
-        pass
-    st.session_state["SOFT_STOP_PATCHED"] = True
-
-
-
 st.set_page_config(page_title="Rep Dashboard", layout="wide")
+
+# -----------------------------------------------------------------------
+# 🔐 GOOGLE SSO AUTH
+# -----------------------------------------------------------------------
+ALLOWED_DOMAIN = "lawnstarter.com"
+
+# Roles that can use "View As" to see other reps
+TL_ROLES    = {"Team Lead"}
+SM_ROLES    = {"Senior Manager", "Director", "VP"}
+
+# Cache auth in session_state so it survives re-runs and component refreshes
+if st.user.is_logged_in:
+    st.session_state['_auth_email']      = (st.user.email      or "").strip()
+    st.session_state['_auth_given_name'] = (st.user.given_name or "").strip()
+    st.session_state['_auth_full_name']  = (st.user.name       or "").strip()
+
+_is_authed = st.session_state.get('_auth_email', '')
+
+if not _is_authed:
+    st.markdown(
+        """
+        <div style='text-align:center; padding: 80px 20px;'>
+            <div style='font-size:48px;'>🌿</div>
+            <h1 style='font-size:36px; font-weight:900;'>Sales Rep Dashboard</h1>
+            <p style='font-size:18px; color:#aaa; margin-bottom:32px;'>
+                Sign in with your LawnStarter Google account to continue.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    col1, col2, col3 = st.columns([2, 1, 2])
+    with col2:
+        st.login("google")
+    st.stop()
+
+user_email      = st.session_state['_auth_email']
+user_given_name = st.session_state['_auth_given_name']
+user_full_name  = st.session_state['_auth_full_name']
+
+if not user_email.lower().endswith(f"@{ALLOWED_DOMAIN}"):
+    st.error(f"❌ Access restricted to @{ALLOWED_DOMAIN} accounts. You're signed in as **{user_email}**.")
+    st.session_state.pop('_auth_email', None)
+    st.logout()
+    st.stop()
+
+# -----------------------------------------------------------------------
+# Detect role from roster (cached so it doesn't re-fetch every render)
+# -----------------------------------------------------------------------
+@st.cache_data(show_spinner=False, ttl=300)
+def _load_roster_for_auth():
+    ROSTER_URL = (
+        "https://docs.google.com/spreadsheets/d/"
+        "1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU"
+        "/export?format=csv&gid=171451260"
+    )
+    try:
+        raw = pd.read_csv(ROSTER_URL, header=None)
+        raw.columns = raw.iloc[1]
+        raw = raw.iloc[2:].reset_index(drop=True)
+        raw.columns = raw.columns.str.strip()
+        raw = raw[raw['Rep'].notna() & (raw['Rep'].astype(str).str.strip() != '')].copy()
+        raw['rep_key'] = raw['Rep'].str.lower().str.strip()
+        return raw[['rep_key', 'First_Name', 'Last_Name', 'Current_Role',
+                    'Manager_Direct', 'Team Name']].drop_duplicates('rep_key')
+    except Exception:
+        return pd.DataFrame()
+
+roster_auth = _load_roster_for_auth()
+auth_key    = user_email.lower().strip()
+auth_row    = roster_auth[roster_auth['rep_key'] == auth_key]
+
+def _safe(val, fallback=""):
+    return str(val).strip() if val is not None and str(val).strip() not in ("", "nan") else fallback
+
+# Use Google's given_name as primary, fall back to roster, then email prefix
+auth_first  = user_given_name or (_safe(auth_row['First_Name'].values[0]) if not auth_row.empty else user_email.split('@')[0].split('.')[0].title())
+auth_role   = _safe(auth_row['Current_Role'].values[0])   if not auth_row.empty else ""
+auth_mgr    = _safe(auth_row['Manager_Direct'].values[0]) if not auth_row.empty else ""
+auth_team   = _safe(auth_row['Team Name'].values[0])      if not auth_row.empty else ""
+
+is_tl = any(auth_role.startswith(r) for r in TL_ROLES)
+is_sm = any(auth_role.startswith(r) for r in SM_ROLES)
+
+# -----------------------------------------------------------------------
+# "View As" — TLs see their team, SMs see everyone, reps see only themselves
+# -----------------------------------------------------------------------
+if is_sm:
+    all_reps = sorted(roster_auth['rep_key'].tolist())
+    view_options = ["— View as... —"] + all_reps
+    view_label   = "👁 Senior Manager: View as rep"
+elif is_tl:
+    team_reps = roster_auth[
+        roster_auth['Manager_Direct'].str.strip().str.lower() == auth_first.lower()
+    ]['rep_key'].tolist()
+    # fallback: match by exact name in Manager_Direct column
+    if not team_reps:
+        full_name = f"{auth_first} {auth_row['Last_Name'].values[0].strip()}" if not auth_row.empty else auth_first
+        team_reps = roster_auth[
+            roster_auth['Manager_Direct'].str.strip() == full_name
+        ]['rep_key'].tolist()
+    view_options = [auth_key] + sorted(set(team_reps) - {auth_key})
+    view_label   = "👁 Team Lead: View as rep"
+else:
+    view_options = [auth_key]
+    view_label   = None
+
+# Sidebar: logout + view-as
+with st.sidebar:
+    _pic = getattr(st.user, 'picture', None)
+    if _pic:
+        st.markdown(f"<img src='{_pic}' width='48' style='border-radius:50%;display:block;margin-bottom:6px;'>", unsafe_allow_html=True)
+    st.markdown(f"**{user_full_name or auth_first}**  \n`{user_email}`")
+    if auth_team:
+        st.caption(f"🏷 {auth_team}")
+    st.markdown("---")
+    if len(view_options) > 1:
+        viewed_email = st.selectbox(view_label, view_options, key="view_as_email")
+        if viewed_email == "— View as... —":
+            viewed_email = auth_key
+    else:
+        viewed_email = auth_key
+    st.markdown("---")
+    if st.button("🚪 Sign out", use_container_width=True):
+        st.session_state.clear()
+        st.logout()
+
+# Store viewed rep in session state so tabs can read it
+st.session_state["selected_rep"] = viewed_email
+
+# Viewed rep's display name
+viewed_row   = roster_auth[roster_auth['rep_key'] == viewed_email]
+viewed_first = _safe(viewed_row['First_Name'].values[0], viewed_email.split('@')[0].split('.')[0].title()) if not viewed_row.empty else viewed_email.split('@')[0].split('.')[0].title()
+viewed_team  = _safe(viewed_row['Team Name'].values[0])  if not viewed_row.empty else ""
+
+# -----------------------------------------------------------------------
+# ✅ Personalized welcome banner (shown at top of every page)
+# -----------------------------------------------------------------------
+_viewing_as_self = (viewed_email == auth_key)
+_banner_name     = auth_first if _viewing_as_self else f"{viewed_first} (via {auth_first})"
+
+st.markdown(
+    f"<div style='text-align:right; font-size:13px; color:#888; margin-bottom:-10px;'>"
+    f"Signed in as <b>{user_email}</b> &nbsp;|&nbsp; "
+    f"{'Viewing own dashboard' if _viewing_as_self else f'Viewing: <b>{viewed_email}</b>'}"
+    f"</div>",
+    unsafe_allow_html=True,
+)
+
+
 st.title("🌟 Sales Rep Performance Dashboard")
 
 # 🔁 Auto-refresh every 60 seconds (60000 ms)
@@ -34,15 +169,33 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 Leaderboard", "🧮 Ca
 sheet_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=171451260"
 
 history_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=303010891"
+# Hardcoded absolute path so Streamlit always finds the CSV regardless of working directory
+_HISTORY_CSV = "/Users/heatherpainter/Desktop/rep_dashboard_project/data/rep_history.csv"
+
 @st.cache_data(show_spinner=False)
 def load_history(_cache_bust_key: str):
-    df = pd.read_csv(history_url, header=1)
-    # 🧼 Remove mid-sheet header rows
-    df = df[df['Date'].astype(str).str.lower() != 'date']
-    # ✅ Keep only rows that have valid reps
-    df = df[df['Rep'].notna()]
-    # 📅 Convert 'Date' to datetime
-    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    import os
+    try:
+        if os.path.exists(_HISTORY_CSV) and os.path.getsize(_HISTORY_CSV) > 0:
+            df = pd.read_csv(_HISTORY_CSV)
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            df = df[df['Rep'].notna()]
+        else:
+            raise FileNotFoundError("CSV not found")
+    except Exception:
+        # Fallback: Google Sheet
+        df = pd.read_csv(history_url, header=1)
+        df = df[df['Date'].astype(str).str.lower() != 'date']
+        df = df[df['Rep'].notna()]
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+
+    # Ensure columns expected by the dashboard always exist
+    if 'Team Name' not in df.columns:
+        df['Team Name'] = 'Unknown'
+    if 'First_Name' not in df.columns:
+        df['First_Name'] = df['Rep'].str.split('@').str[0].str.split('.').str[0].str.title()
+    if 'Last_Name' not in df.columns:
+        df['Last_Name'] = ''
     return df
 
 
@@ -50,7 +203,40 @@ def load_history(_cache_bust_key: str):
 
 
 def load_data():
-    return pd.read_csv(sheet_url, header=1)
+    df = pd.read_csv(sheet_url, header=1)
+
+    # Enrich today's attach metrics with Redshift data (hourly CSV sync)
+    # Replaces: Wins, Lawn Treatment, Mosquito, Bush Trimming, Flower Bed Weeding, Leaf Removal
+    # Keeps from Sheet: Calls, Conversion, QA, Bonus, rep metadata (no same-day Five9)
+    ATTACH_COLS = ['Wins', 'Lawn Treatment', 'Mosquito', 'Bush Trimming', 'Flower Bed Weeding', 'Leaf Removal']
+    try:
+        import os
+        from datetime import date as _date
+        if os.path.exists(_HISTORY_CSV) and os.path.getsize(_HISTORY_CSV) > 0:
+            hist = pd.read_csv(_HISTORY_CSV)
+            hist['Date'] = pd.to_datetime(hist['Date'], errors='coerce')
+            today_rs = hist[hist['Date'].dt.date == _date.today()].copy()
+
+            if not today_rs.empty:
+                df['_rep_key'] = df['Rep'].astype(str).str.lower().str.strip()
+                today_rs['_rep_key'] = today_rs['Rep'].astype(str).str.lower().str.strip()
+
+                # Only keep the columns we want to overwrite
+                rs_today = today_rs[['_rep_key'] + [c for c in ATTACH_COLS if c in today_rs.columns]]
+
+                df = df.merge(rs_today, on='_rep_key', how='left', suffixes=('', '_rs'))
+
+                # For each metric: use Redshift value if available, else keep Sheet value
+                for col in ATTACH_COLS:
+                    if f'{col}_rs' in df.columns:
+                        df[col] = df[f'{col}_rs'].combine_first(df[col])
+                        df.drop(columns=[f'{col}_rs'], inplace=True)
+
+                df.drop(columns=['_rep_key'], inplace=True)
+    except Exception:
+        pass  # Any failure silently falls back to Google Sheet only
+
+    return df
 
 def show_yesterday_service_top(df, column_name, emoji, title):
     if column_name not in df.columns:
@@ -230,7 +416,7 @@ def get_records_to_beat(history_df):
     Wins + each attach service.
     Returns a list of dicts with metric, value, full_name, team, date.
     """
-    metrics = ['Wins', 'Lawn Treatment', 'Bush Trimming', 'Mosquito', 'Flower Bed Weeding', 'Leaf Removal']
+    metrics = ['Pool', 'Wins', 'Lawn Treatment', 'Bush Trimming', 'Mosquito', 'Flower Bed Weeding', 'Leaf Removal']
     history_df = history_df.copy()
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
     history_df = clean_numeric(history_df, metrics)
@@ -307,7 +493,7 @@ def get_last_week_champions(history_df, min_calls_team=50, min_calls_rep=10):
         )
 
     # ==========================================
-    # Reps — rank by CONVERSION (no min filter)
+    # Reps — rank by CONVERSION (min 10 calls)
     # ==========================================
     rep_totals = df.groupby(['Rep','First_Name','Last_Name','Team Name'], dropna=False).agg(
         Wins=('Wins','sum'),
@@ -315,6 +501,9 @@ def get_last_week_champions(history_df, min_calls_team=50, min_calls_rep=10):
     ).reset_index()
 
     if not rep_totals.empty:
+        # Require at least 10 calls to qualify — prevents tiny-sample outliers
+        rep_totals = rep_totals[rep_totals['Calls'] >= min_calls_rep]
+
         denom = rep_totals['Calls'].replace(0, pd.NA)
         rep_totals['Conversion'] = (rep_totals['Wins'] / denom) * 100
         rep_totals['Conversion'] = rep_totals['Conversion'].fillna(0.0)
@@ -352,10 +541,10 @@ IQ_MAP = [
 ]
 
 CORE_IQS = [
-    "Lawn Treatment", "Bushes", "Mosquito", "Flower Bed Weeding", "Leaf Removal"
+    "Pool", "Lawn Treatment", "Bushes", "Mosquito", "Flower Bed Weeding", "Leaf Removal"
 ]
 SPECIALTY_IQS = [
-    "Overseeding and Aeration IQ", "Lime Treatment", "Disease Fungicide", "Pool"
+    "Overseeding and Aeration IQ", "Lime Treatment", "Disease Fungicide"
 ]
 
 TOP_N_PER_IQ = 5  # show top N reps per card
@@ -380,14 +569,15 @@ def _nice_card(title: str, icon: str, body_md: str):
 def _render_single_iq_card(df: pd.DataFrame, display_name: str, col_name: str, icon: str):
     """Show top sellers for one IQ (hide if col missing or all zeros)."""
     if col_name not in df.columns:
+        # Pool column not in sheet yet — show nudge so the slot isn't invisible
+        if display_name == "Pool":
+            _nice_card(display_name, icon, "_No sales yet — be the first to make a splash! 🌊_")
         return
     d = df[['Full_Name', col_name]].copy()
     d[col_name] = pd.to_numeric(d[col_name], errors='coerce').fillna(0)
     d = d[d[col_name] > 0].sort_values(col_name, ascending=False)
     if d.empty:
-        # For Pool specifically, show a nudge if no sales yet
-        if display_name == "Pool":
-            _nice_card(display_name, icon, "_No sales yet — be the first to make a splash!_")
+        _nice_card(display_name, icon, "_No sales yet — go be the first!_")
         return
     lines = [f"• <b>{r['Full_Name']}</b> — {int(r[col_name])}" for _, r in d.head(TOP_N_PER_IQ).iterrows()]
     _nice_card(display_name, icon, "<br>".join(lines))
@@ -418,7 +608,7 @@ def render_all_iq_panels(df: pd.DataFrame, collapsible_specialty: bool = False):
     st.caption("Only reps with >0 per IQ are shown. Panels auto-hide if no sales.")
 
 def render_pool_splash_banners(df: pd.DataFrame):
-    """Banner every time someone has ≥1 Pool sale (simple, no events stream needed)."""
+    """Hero banner for Pool sales — Pool is the #1 priority metric."""
     if "Pool" not in df.columns:
         return
     tmp = df[['Full_Name', 'Pool']].copy()
@@ -426,23 +616,53 @@ def render_pool_splash_banners(df: pd.DataFrame):
     tmp = tmp[tmp['Pool'] > 0].sort_values('Pool', ascending=False)
     if tmp.empty:
         return
+    total_pool = int(tmp['Pool'].sum())
+    top_rep = tmp.iloc[0]
+    # Hero summary banner
+    st.markdown(
+        f"""
+        <div style="
+            border:3px solid #06b6d4;
+            background:linear-gradient(135deg,rgba(6,182,212,0.22),rgba(6,182,212,0.06));
+            padding:18px 20px;
+            border-radius:16px;
+            margin-bottom:14px;
+            box-shadow:0 4px 20px rgba(6,182,212,0.30);
+            text-align:center;
+        ">
+            <div style="font-size:13px;font-weight:800;color:#06b6d4;text-transform:uppercase;letter-spacing:2px;">
+                🏊 #1 PRIORITY — POOL
+            </div>
+            <div style="font-size:28px;font-weight:900;color:#06b6d4;margin:6px 0;">
+                {total_pool} Pool {'Sale' if total_pool==1 else 'Sales'} Today!
+            </div>
+            <div style="font-size:15px;">
+                🥇 Leading: <b>{top_rep['Full_Name']}</b> — {int(top_rep['Pool'])} {'sale' if top_rep['Pool']==1 else 'sales'}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    # Individual splash alerts
     for _, r in tmp.iterrows():
         st.markdown(
             f"""
             <div style="
                 border-left:6px solid #06b6d4;
-                background:rgba(6,182,212,0.10);
-                padding:12px 14px;
+                background:rgba(6,182,212,0.12);
+                padding:14px 18px;
                 border-radius:12px;
-                margin-bottom:10px;
-                font-size:16px;
+                margin-bottom:8px;
+                font-size:17px;
             ">
-                🏊 <b>SPLASH ALERT!</b> <b>{r['Full_Name']}</b> sold a <b>Pool</b> IQ!
+                🌊 <b>SPLASH ALERT!</b> <b>{r['Full_Name']}</b> sold
+                <b>{int(r['Pool'])} Pool {'IQ' if r['Pool']==1 else 'IQs'}</b> today!
+                {'🎉🎉🎉' if r['Pool'] >= 3 else '🎉🎉' if r['Pool'] >= 2 else '🎉'}
             </div>
             """,
             unsafe_allow_html=True
         )
-        st.balloons()
+    st.balloons()
 
 
 with tab1:
@@ -461,6 +681,103 @@ with tab1:
     history_df = load_history(cache_bust_key)
     history_df.columns = history_df.columns.str.strip()
 
+    # -----------------------------------------------------------------------
+    # 👋 Personalized Welcome Banner
+    # -----------------------------------------------------------------------
+    try:
+        from pytz import timezone as _ctz
+        _cst = _ctz('America/Chicago')
+        _today_cst = datetime.now(_cst).date()
+        _yesterday_cst = _today_cst - timedelta(days=1)
+
+        def _pct(val):
+            try: return float(str(val).replace('%','').strip())
+            except: return 0.0
+
+        # Today's stats from live df
+        _me_today = df[df['Rep'].astype(str).str.lower().str.strip() == viewed_email]
+        _conv_today  = _pct(_me_today['Conversion'].values[0])  if not _me_today.empty else 0.0
+        _wins_today  = int(pd.to_numeric(_me_today['Wins'].values[0], errors='coerce'))   if not _me_today.empty else 0
+        _calls_today = int(pd.to_numeric(_me_today['Calls'].values[0], errors='coerce'))  if not _me_today.empty else 0
+        if _conv_today < 1.0 and _conv_today > 0:
+            _conv_today *= 100
+
+        # Yesterday's stats from history
+        _hist_me = history_df[
+            (history_df['Rep'].astype(str).str.lower().str.strip() == viewed_email) &
+            (history_df['Date'].dt.date == _yesterday_cst)
+        ]
+        _conv_yest = _pct(_hist_me['Conversion'].values[0]) if not _hist_me.empty else None
+        if _conv_yest is not None and _conv_yest < 1.0 and _conv_yest > 0:
+            _conv_yest *= 100
+
+        # Attach rate today
+        _attach_cols = ['Lawn Treatment','Bush Trimming','Flower Bed Weeding','Mosquito','Leaf Removal']
+        _attaches = sum(int(pd.to_numeric(_me_today[c].values[0], errors='coerce')) for c in _attach_cols if c in _me_today.columns and not _me_today.empty)
+        _attach_rate = (_attaches / _wins_today * 100) if _wins_today > 0 else 0.0
+        _lt = int(pd.to_numeric(_me_today['Lawn Treatment'].values[0], errors='coerce')) if 'Lawn Treatment' in _me_today.columns and not _me_today.empty else 0
+        _lt_rate = (_lt / _wins_today * 100) if _wins_today > 0 else 0.0
+
+        # Conversion delta vs yesterday
+        if _conv_yest is not None and _conv_yest > 0:
+            _delta = _conv_today - _conv_yest
+            _delta_str = f"({'▲' if _delta >= 0 else '▼'} {abs(_delta):.1f}% vs yesterday)"
+            _delta_color = "#22c55e" if _delta >= 0 else "#ef4444"
+        else:
+            _delta_str, _delta_color = "", "#888"
+
+        # How many wins to pass the next team
+        _team_totals_wb = df[df['Calls'].apply(lambda x: pd.to_numeric(x, errors='coerce') or 0) > 0].copy()
+        _team_totals_wb['Calls'] = pd.to_numeric(_team_totals_wb['Calls'], errors='coerce')
+        _team_totals_wb['Wins']  = pd.to_numeric(_team_totals_wb['Wins'],  errors='coerce')
+        _tg = _team_totals_wb.groupby('Team Name').agg(W=('Wins','sum'), C=('Calls','sum')).reset_index()
+        _tg = _tg[_tg['C'] >= 10]
+        _tg['Conv'] = _tg['W'] / _tg['C'] * 100
+        _my_team_row = _tg[_tg['Team Name'].str.strip() == viewed_team] if viewed_team else pd.DataFrame()
+        _gap_msg = ""
+        if not _my_team_row.empty:
+            _my_conv = _my_team_row['Conv'].values[0]
+            _above   = _tg[_tg['Conv'] > _my_conv].sort_values('Conv')
+            if not _above.empty:
+                _next_team     = _above.iloc[0]['Team Name']
+                _next_conv     = _above.iloc[0]['Conv']
+                _my_calls      = _my_team_row['C'].values[0]
+                _my_wins       = _my_team_row['W'].values[0]
+                _wins_needed   = max(0, math.ceil(_next_conv / 100 * _my_calls - _my_wins) + 1)
+                _gap_msg = f"🏁 <b>{_wins_needed} more win{'s' if _wins_needed != 1 else ''}</b> to pass <b>{_next_team}</b>"
+
+        # Greeting based on time
+        _hour = datetime.now(_ctz('America/Chicago')).hour
+        _greeting = "Good morning" if _hour < 12 else ("Good afternoon" if _hour < 17 else "Good evening")
+
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, rgba(34,197,94,0.12), rgba(6,182,212,0.08));
+            border: 1.5px solid rgba(34,197,94,0.35);
+            border-radius: 16px;
+            padding: 20px 28px;
+            margin-bottom: 18px;
+        ">
+            <div style="font-size:22px; font-weight:900; margin-bottom:10px;">
+                {_greeting}, {viewed_first} 👋
+            </div>
+            <div style="display:flex; gap:40px; flex-wrap:wrap; font-size:15px;">
+                <div>
+                    📞 <b>{_calls_today} calls</b> &nbsp;·&nbsp;
+                    🏆 <b>{_wins_today} wins</b>
+                </div>
+                <div>
+                    🎯 Conversion: <b>{_conv_today:.1f}%</b>
+                    <span style="color:{_delta_color}; font-size:13px;"> {_delta_str}</span>
+                </div>
+                <div>🧩 Attach Rate: <b>{_attach_rate:.0f}%</b></div>
+                <div>🌿 LT Attach: <b>{_lt_rate:.0f}%</b></div>
+            </div>
+            {"<div style='margin-top:10px; font-size:14px;'>" + _gap_msg + "</div>" if _gap_msg else ""}
+        </div>
+        """, unsafe_allow_html=True)
+    except Exception:
+        pass
 
     # 🎂 Handle Birthdays
     if 'Birthday' in df.columns:
@@ -526,24 +843,18 @@ with tab1:
     # 🏊 Pool splash shoutouts at the very top
     render_pool_splash_banners(df)
 
-    all_reps = sorted(df[rep_col].dropna().unique())
-    all_reps.insert(0, "🔍 Select your name")
-    user = st.selectbox("👤 Who's using this app right now?", all_reps, key="selected_rep")
-
-    if user == "🔍 Select your name":
-        st.warning("Please select your name from the list to continue.")
-        st.stop()
+    # Identity comes from SSO auth (set in session_state by the View As sidebar block)
+    user = st.session_state.get("selected_rep", viewed_email)
 
     active_df = df[df['Calls'] >= 1]
     user_data = df[df[rep_col] == user]
-    # user_data should be the filtered df for the selected rep
     if user_data is None or user_data.empty:
-        first_name = (selected_rep or "").split()[0] if selected_rep else "Rep"
+        first_name = user_given_name or (user.split()[0] if user else "Rep")
     else:
         if "First_Name" in user_data.columns and user_data["First_Name"].notna().any():
             first_name = str(user_data["First_Name"].dropna().iloc[0]).strip()
         else:
-            first_name = str(selected_rep).split()[0] if selected_rep else "Rep"
+            first_name = user_given_name or (user.split()[0] if user else "Rep")
 
     # --------------------------------------------
     # 🏆 Records to Beat (All-Time Single-Day Highs)
@@ -552,20 +863,42 @@ with tab1:
 
     if records:
         st.markdown("<h2 style='text-align:center;'>🏆 Records to Beat (All-Time Single-Day Highs)</h2>", unsafe_allow_html=True)
-        cols = st.columns(min(3, len(records)))
-        for i, rec in enumerate(records):
-            with cols[i % len(cols)]:
-                date_str = rec['date'].strftime('%b %d, %Y') if rec['date'] else '—'
-                st.markdown(f"""
-                <div style='text-align:center; padding:14px; border:1px solid #ddd; border-radius:12px; margin-bottom:12px;'>
-                    <div style='font-size:18px; font-weight:700;'>{rec['metric']}</div>
-                    <div style='font-size:36px; font-weight:800; margin:6px 0;'>{rec['value']}</div>
-                    <div style='font-size:14px; opacity:0.9;'>{rec['full_name']}</div>
-                    <div style='font-size:12px; opacity:0.7;'>{rec['team']}</div>
-                    <div style='font-size:12px; opacity:0.7;'>on {date_str}</div>
-                    <div style='margin-top:8px; font-size:13px;'>🔥 Number to beat!</div>
+        # Pool is always rendered first as the hero card
+        pool_rec = next((r for r in records if r['metric'] == 'Pool'), None)
+        other_recs = [r for r in records if r['metric'] != 'Pool']
+        if pool_rec:
+            date_str = pool_rec['date'].strftime('%b %d, %Y') if pool_rec['date'] else '—'
+            st.markdown(f"""
+            <div style='text-align:center; padding:24px; border:3px solid #06b6d4;
+                 border-radius:18px;
+                 background:linear-gradient(135deg,rgba(6,182,212,0.18),rgba(6,182,212,0.04));
+                 margin-bottom:18px; box-shadow:0 4px 24px rgba(6,182,212,0.28);'>
+                <div style='font-size:13px;font-weight:800;color:#06b6d4;text-transform:uppercase;letter-spacing:2px;margin-bottom:4px;'>
+                    🏊 #1 PRIORITY — POOL RECORD
                 </div>
-                """, unsafe_allow_html=True)
+                <div style='font-size:20px; font-weight:700; margin:6px 0 2px;'>Pool Cleans Sold in a Single Day</div>
+                <div style='font-size:60px; font-weight:900; color:#06b6d4; line-height:1.1; margin:6px 0;'>{pool_rec['value']}</div>
+                <div style='font-size:15px; opacity:0.9;'>{pool_rec['full_name']}</div>
+                <div style='font-size:13px; opacity:0.7;'>{pool_rec['team']}</div>
+                <div style='font-size:13px; opacity:0.7;'>on {date_str}</div>
+                <div style='margin-top:12px; font-size:16px; color:#06b6d4; font-weight:800;'>🌊 CAN YOU MAKE A BIGGER SPLASH?</div>
+            </div>
+            """, unsafe_allow_html=True)
+        if other_recs:
+            cols = st.columns(min(3, len(other_recs)))
+            for i, rec in enumerate(other_recs):
+                with cols[i % len(cols)]:
+                    date_str = rec['date'].strftime('%b %d, %Y') if rec['date'] else '—'
+                    st.markdown(f"""
+                    <div style='text-align:center; padding:14px; border:1px solid #ddd; border-radius:12px; margin-bottom:12px;'>
+                        <div style='font-size:18px; font-weight:700;'>{rec['metric']}</div>
+                        <div style='font-size:36px; font-weight:800; margin:6px 0;'>{rec['value']}</div>
+                        <div style='font-size:14px; opacity:0.9;'>{rec['full_name']}</div>
+                        <div style='font-size:12px; opacity:0.7;'>{rec['team']}</div>
+                        <div style='font-size:12px; opacity:0.7;'>on {date_str}</div>
+                        <div style='margin-top:8px; font-size:13px;'>🔥 Number to beat!</div>
+                    </div>
+                    """, unsafe_allow_html=True)
     else:
         st.info("No historical records found yet — go set the bar! 🔥")
 
@@ -700,10 +1033,13 @@ with tab1:
     # 👀 If user has 0 calls today, show message
     user_calls = user_data['Calls'].sum() if not user_data.empty else 0
     if user_calls == 0:
-        st.warning("📞 No calls logged for you today yet! Let’s change that. 💪")
+        st.warning("📞 No calls logged for you today yet! Let's change that. 💪")
 
     try:
         personal_conversion = float(user_data[conversion_col].astype(str).str.replace('%', '').str.strip().values[0]) if not user_data.empty else 0.0
+        # Sheet may store as decimal (0.28) instead of percent (28) — normalise
+        if personal_conversion < 1.0 and personal_conversion > 0:
+            personal_conversion *= 100
     except:
         personal_conversion = 0.0
 
@@ -740,15 +1076,10 @@ with tab1:
         gap = max(0.0, thr_green - personal_conversion) if thr_green > thr_base else max(0.0, thr_base - personal_conversion)
         st.warning(f"🚫 Almost There! Just {gap:.2f}% more for payout.")
     else:
-        st.error(f"❌ Below Base ({thr_base:.2f}%). Let’s lock in and close the gap!")
+        st.error(f"❌ Below Base ({thr_base:.2f}%). Let's lock in and close the gap!")
 
 
 
-    # 🍃 LT Motivation if none sold
-    if 'Lawn Treatment' in user_data.columns and not user_data.empty:
-        user_lt = pd.to_numeric(user_data['Lawn Treatment'], errors='coerce').fillna(0).values[0]
-        if user_lt == 0:
-            st.warning("🍃 You haven’t landed any Lawn Treatments today... Just one gets you in the race for bonus pay!")
 
 
 
@@ -876,6 +1207,11 @@ with tab1:
     ).reset_index()
 
     team_totals['Conversion'] = (team_totals['Total_Wins'] / team_totals['Total_Calls']) * 100
+
+    # Require a minimum number of calls so a team with 1 win / 3 calls doesn't top the board
+    MIN_TEAM_CALLS = 10
+    team_totals = team_totals[team_totals['Total_Calls'] >= MIN_TEAM_CALLS].copy()
+
     team_totals['Rank'] = team_totals['Conversion'].rank(ascending=False, method='min').astype(int)
 
     # 🎖️ Display Top 3 Teams (Side by Side)
@@ -1086,6 +1422,58 @@ with tab1:
 
     # 🧩 Instant Quote Leaderboards (replacing the old service leaderboards section)
     render_all_iq_panels(df, collapsible_specialty=False)  # set True if you want the second row collapsed
+
+    # 📋 Full Today Attach Leaderboard — all reps with any attach today
+    st.markdown("<hr><h3 style='text-align: center;'>📋 Today's Full Attach Leaderboard</h3>", unsafe_allow_html=True)
+
+    today_attach_cols = ['Pool', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito', 'Leaf Removal', 'Lawn Treatment']
+    for c in today_attach_cols:
+        if c not in df.columns:
+            df[c] = 0
+        df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+
+    # Only reps with at least one attach today
+    attach_df = df[df[today_attach_cols].sum(axis=1) > 0].copy()
+
+    if attach_df.empty:
+        st.info("No attach services sold yet today — check back soon!")
+    else:
+        # Sort: total attaches descending, then Pool (priority) descending
+        attach_df['_total'] = attach_df[today_attach_cols].sum(axis=1)
+        attach_df = attach_df.sort_values(['_total', 'Pool'], ascending=[False, False]).reset_index(drop=True)
+        attach_df['Rank'] = attach_df.index + 1
+
+        # Ensure Team_Logo exists
+        if 'Team_Logo' not in attach_df.columns and 'Team Name' in attach_df.columns:
+            attach_df['Team_Logo'] = attach_df['Team Name'].astype(str).apply(
+                lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='30'>" if name not in ('', 'nan', 'Unknown') else ""
+            )
+        elif 'Team_Logo' not in attach_df.columns:
+            attach_df['Team_Logo'] = ""
+
+        display_cols = ['Rank', 'Full_Name'] + today_attach_cols + ['Team_Logo']
+        attach_display = attach_df[display_cols].copy()
+        attach_display.columns = ['Rank', 'Rep Name', '🏊 Pool', '🌳 Bush Trim', '🌸 Flower Bed', '🦟 Mosquito', '🍂 Leaf Removal', '🌿 Lawn Treatment', 'Team Logo']
+
+        # Highlight Pool cells > 0 in cyan
+        def style_pool(val):
+            try:
+                if int(val) > 0:
+                    return f"<span style='color:#06b6d4;font-weight:900;font-size:16px;'>{int(val)}</span>"
+            except:
+                pass
+            return str(int(val)) if str(val) not in ('', 'nan') else '0'
+
+        attach_display['🏊 Pool'] = attach_display['🏊 Pool'].apply(style_pool)
+
+        st.markdown(attach_display.to_html(escape=False, index=False), unsafe_allow_html=True)
+        st.markdown("""
+        <style>
+        table td, table th { text-align: center !important; vertical-align: middle; }
+        table { margin-left: auto; margin-right: auto; border-collapse: collapse; width: 95%; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+        th { background-color: #333; color: white; font-weight: bold; }
+        </style>
+        """, unsafe_allow_html=True)
 
 
 # --------------------------------------------
@@ -1298,18 +1686,13 @@ with tab3:
     lt_tiers         = get_tiers_for("Lawn Treatment", _tiers, [(8.25, 3), (7.5, 2), (6.5, 1), (5.5, 0)])
     qa_tiers         = get_tiers_for("QA", _tiers, [(100, 2), (92, 1), (80, 0)])
 
-    # ✅ Grab selected rep from session_state
-    email = st.session_state.get("selected_rep")
-    if not email:
-        st.warning("Please select a rep on the Leaderboard tab first.")
-        st.stop()
+    # ✅ Grab selected rep from session_state (always set from auth)
+    email = st.session_state.get("selected_rep", viewed_email)
 
     match = df[df['Rep'].astype(str).str.strip() == email.strip()]
-    if match.empty:
-        st.error("Could not find this rep in the data.")
-        st.stop()
-
-    row = match.iloc[0]
+    _bonus_has_data = not match.empty
+    if not _bonus_has_data:
+        st.info("No sales rep data found for your account on the bonus tracker.")
 
     def percent(val):
         try:
@@ -1317,53 +1700,141 @@ with tab3:
         except:
             return 0
 
-    metrics = {
-        'Conversion': percent(row.get('BonusConversion', 0)),
-        'All-In Attach': percent(row.get('BonusAllinAttach', 0)),
-        'Lawn Treatment': percent(row.get('BonusLT', 0)),
-        'QA': percent(row.get('BonusQA', 0))
-    }
+    if _bonus_has_data:
+        row = match.iloc[0]
 
-    points = {
-        'Conversion': get_points(metrics['Conversion'], conversion_tiers),
-        'All-In Attach': get_points(metrics['All-In Attach'], attach_tiers),
-        'Lawn Treatment': get_points(metrics['Lawn Treatment'], lt_tiers),
-        'QA': get_points(metrics['QA'], qa_tiers)
-    }
+        metrics = {
+            'Conversion': percent(row.get('BonusConversion', 0)),
+            'All-In Attach': percent(row.get('BonusAllinAttach', 0)),
+            'QA': percent(row.get('BonusQA', 0))
+        }
 
-    st.subheader(f"🧑‍🌾 Growth Stats for {row['First_Name']}")
-    for k in metrics:
-        st.markdown(f"**{k}**: {metrics[k]:.2f}% — Points: `{points[k]}`")
+        points = {
+            'Conversion': get_points(metrics['Conversion'], conversion_tiers),
+            'All-In Attach': get_points(metrics['All-In Attach'], attach_tiers),
+            'QA': get_points(metrics['QA'], qa_tiers)
+        }
 
-    st.subheader("🌱 Focus Patch")
-    focus = min(points, key=points.get)
-    st.info(f"Your area of growth: **{focus}** — currently {metrics[focus]:.2f}%")
+        st.subheader(f"🧑‍🌾 Growth Stats for {row.get('First_Name', viewed_first)}")
+        for k in metrics:
+            st.markdown(f"**{k}**: {metrics[k]:.2f}% — Points: `{points[k]}`")
 
-    total_points = sum(points.values())
-    raw_bonus = row.get('Bonus Pay', 0)
-    hourly = f"${float(raw_bonus):.2f}" if raw_bonus and str(raw_bonus).strip().replace("$", "") != "0" else "$0.00"
-    st.markdown(f"**🌼 Points Earned:** {total_points} — **Hourly Forecast:** {hourly}")
-    st.caption("You’ll earn this rate *only* if all 4 base qualifiers are met.")
+        st.subheader("🌱 Focus Patch")
+        focus = min(points, key=points.get)
+        st.info(f"Your area of growth: **{focus}** — currently {metrics[focus]:.2f}%")
+
+        total_points = sum(points.values())
+        raw_bonus = row.get('Bonus Pay', 0)
+        hourly = f"${float(raw_bonus):.2f}" if raw_bonus and str(raw_bonus).strip().replace("$", "") != "0" else "$0.00"
+        st.markdown(f"**🌼 Points Earned:** {total_points} — **Hourly Forecast:** {hourly}")
+
+        # ✅ Bonus Qualifier Status — all 3 base thresholds must be met to earn any bonus
+        st.markdown("### 🎯 Bonus Qualifier Status")
+        st.caption("You'll earn this rate **only if all 3 minimum qualifiers are met** — Conversion, All-In Attach, and QA.")
+
+        def _get_base(tiers, fallback):
+            """Return the lowest (base) threshold from a tier list."""
+            if tiers:
+                return tiers[-1][0]
+            return fallback
+
+        base_conv_val   = _get_base(conversion_tiers, 20.0)
+        base_attach_val = _get_base(attach_tiers, 25.0)
+        base_qa_val     = _get_base(qa_tiers, 80.0)
+
+        qualifiers = {
+            'Conversion':    (metrics['Conversion'],    base_conv_val,   f"{base_conv_val:.0f}%"),
+            'All-In Attach': (metrics['All-In Attach'], base_attach_val, f"{base_attach_val:.0f}%"),
+            'QA':            (metrics['QA'],            base_qa_val,     f"{base_qa_val:.0f}%"),
+        }
+
+        met_list     = [k for k, (val, base, _) in qualifiers.items() if val >= base]
+        not_met_list = [k for k, (val, base, _) in qualifiers.items() if val < base]
+
+        # Visual qualifier checklist
+        q_cols = st.columns(3)
+        labels = ['Conversion', 'All-In Attach', 'QA']
+        for i, k in enumerate(labels):
+            val, base, need_str = qualifiers[k]
+            met = val >= base
+            gap = base - val
+            with q_cols[i]:
+                if met:
+                    st.markdown(
+                        f"<div style='background:rgba(34,197,94,0.15);border:2px solid #22c55e;border-radius:12px;"
+                        f"padding:12px;text-align:center;'>"
+                        f"<div style='font-size:24px;'>✅</div>"
+                        f"<div style='font-weight:800;'>{k}</div>"
+                        f"<div style='font-size:13px;color:#22c55e;'>{val:.1f}% — Base met!</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.markdown(
+                        f"<div style='background:rgba(239,68,68,0.12);border:2px solid #ef4444;border-radius:12px;"
+                        f"padding:12px;text-align:center;'>"
+                        f"<div style='font-size:24px;'>❌</div>"
+                        f"<div style='font-weight:800;'>{k}</div>"
+                        f"<div style='font-size:13px;color:#ef4444;'>{val:.1f}% — Need {need_str} ({gap:.1f}% away)</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Coaching shoutout
+        first = row.get('First_Name', viewed_first)
+        if not not_met_list:
+            st.success(f"🎉 {first}, you've hit all 3 qualifiers — you're bonus eligible! Keep pushing those points up! 🔥")
+        elif len(not_met_list) == 1:
+            k = not_met_list[0]
+            val, base, need_str = qualifiers[k]
+            gap = base - val
+            already_met = [m for m in met_list]
+            met_str = " and ".join(already_met) if already_met else "nothing yet"
+            st.warning(
+                f"💪 {first}, you've already met base for **{met_str}** — "
+                f"you just need to get your **{k}** to **{need_str}** "
+                f"({gap:.1f}% away) to unlock your bonus!"
+            )
+        elif len(not_met_list) == 2:
+            k1, k2 = not_met_list
+            _, base1, need1 = qualifiers[k1]
+            _, base2, need2 = qualifiers[k2]
+            met_str = met_list[0] if met_list else None
+            prefix = f"You've got **{met_str}** locked in — " if met_str else ""
+            st.error(
+                f"📈 {first}, {prefix}focus on **{k1}** (need {need1}) "
+                f"and **{k2}** (need {need2}) to qualify for bonus this cycle."
+            )
+        else:
+            st.error(
+                f"🚨 {first}, none of the 3 qualifiers are met yet — "
+                f"let's focus on Conversion first, then All-In Attach and QA. You've got this!"
+            )
 
     # 🏅 Personal Bests Section
     st.markdown("### 🏅 Personal Bests")
 
-    # Load personal bests from history sheet
-    history_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=303010891"
-    history_df = pd.read_csv(history_url, header=1)  # Start at row 2
+    # Load personal bests using shared load_history (CSV preferred, Sheet fallback)
+    from pytz import timezone as _tz
+    _eastern = _tz('US/Eastern')
+    _pb_cache_key = datetime.now(_eastern).strftime('%Y-%m-%d-%H')
+    history_df = load_history(_pb_cache_key)
     history_df.columns = history_df.columns.str.strip()
 
     # Filter all rows for the selected rep
-    rep_history = history_df[history_df['Rep'].astype(str).str.strip() == email]
+    rep_history = history_df[history_df['Rep'].astype(str).str.strip() == email].copy()
 
     # Safely convert relevant columns to numeric
-    rep_history['Wins'] = pd.to_numeric(rep_history['Wins'], errors='coerce').fillna(0)
-    rep_history['Lawn Treatment'] = pd.to_numeric(rep_history['Lawn Treatment'], errors='coerce').fillna(0)
-    rep_history['Bush Trimming'] = pd.to_numeric(rep_history.get('Bush Trimming', 0), errors='coerce').fillna(0)
-    rep_history['Flower Bed Weeding'] = pd.to_numeric(rep_history.get('Flower Bed Weeding', 0), errors='coerce').fillna(0)
-    rep_history['Mosquito'] = pd.to_numeric(rep_history.get('Mosquito', 0), errors='coerce').fillna(0)
+    for _col in ['Wins', 'Lawn Treatment', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito', 'Pool']:
+        if _col in rep_history.columns:
+            rep_history[_col] = pd.to_numeric(rep_history[_col], errors='coerce').fillna(0)
+        else:
+            rep_history[_col] = 0
 
     # Compute personal bests across all days
+    pb_pool = rep_history['Pool'].max()
     pb_wins = rep_history['Wins'].max()
     pb_lawn = rep_history['Lawn Treatment'].max()
     pb_bush = rep_history['Bush Trimming'].max()
@@ -1372,9 +1843,31 @@ with tab3:
 
     def challenge_line(label, pb_val, emoji):
         if pd.isna(pb_val) or pb_val == 0:
-            return f"{emoji} **{label} PB:** 0 — Let’s set a new record today! 💪"
+            return f"{emoji} **{label} PB:** 0 — Let's set a new record today! 💪"
         else:
             return f"{emoji} **{label} PB:** {int(pb_val)} — Can you hit {int(pb_val) + 1} today?"
+
+    # Pool personal best — hero card (Pool is #1 priority!)
+    pool_pb_val = int(pb_pool) if not pd.isna(pb_pool) else 0
+    pool_challenge = f"Can you sell {pool_pb_val + 1} today?" if pool_pb_val > 0 else "Let's set your first Pool record today! 🌊"
+    st.markdown(f"""
+    <div style="
+        border:3px solid #06b6d4;
+        background:linear-gradient(135deg,rgba(6,182,212,0.18),rgba(6,182,212,0.04));
+        padding:18px 20px;
+        border-radius:16px;
+        margin-bottom:14px;
+        box-shadow:0 4px 20px rgba(6,182,212,0.25);
+        text-align:center;
+    ">
+        <div style="font-size:12px;font-weight:800;color:#06b6d4;text-transform:uppercase;letter-spacing:2px;">
+            🏊 #1 PRIORITY — POOL
+        </div>
+        <div style="font-size:15px;font-weight:700;margin:4px 0 2px;">Your Pool Personal Best</div>
+        <div style="font-size:52px;font-weight:900;color:#06b6d4;line-height:1.1;">{pool_pb_val}</div>
+        <div style="font-size:15px;color:#06b6d4;font-weight:700;margin-top:6px;">🌊 {pool_challenge}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
     st.markdown(f"""
     <div style='font-size:18px'>
@@ -1405,7 +1898,6 @@ with tab3:
     tiers_by_metric = {
         "Conversion": conversion_tiers,
         "All-In Attach": attach_tiers,
-        "Lawn Treatment": lt_tiers,
         "QA": qa_tiers,
     }
 
@@ -1428,13 +1920,14 @@ with tab3:
     tiers_df = pd.DataFrame(rows, columns=columns)
     st.dataframe(tiers_df, use_container_width=True, hide_index=True)
 
-    # Points bar chart
-    chart = pd.DataFrame({"Metric": list(points.keys()), "Points": list(points.values())})
-    st.bar_chart(chart.set_index("Metric"))
+    # Points bar chart (only when rep data is available)
+    if _bonus_has_data:
+        chart = pd.DataFrame({"Metric": list(points.keys()), "Points": list(points.values())})
+        st.bar_chart(chart.set_index("Metric"))
 
 
 # --------------------------------------------
-# 📅 TAB 4: Yesterday’s Snapshot
+# 📅 TAB 4: Yesterday's Snapshot
 # --------------------------------------------
 with tab4:
     st.markdown("<h1 style='text-align: center;'>📅 Yesterday's Leaderboard</h1>", unsafe_allow_html=True)
@@ -1478,35 +1971,29 @@ with tab4:
 
 
 
-    # ✅ Get selected rep from session state
-    selected_rep = st.session_state.get("selected_rep")
-    if not selected_rep:
-        st.warning("Please select your name on the Leaderboard tab first.")
-        st.stop()
+    # ✅ Get selected rep from session state (always set from auth now)
+    selected_rep = st.session_state.get("selected_rep", viewed_email)
 
     user_data = yesterday_df[yesterday_df['Rep'] == selected_rep]
-    if user_data.empty:
-        st.error(f"No performance data for {selected_rep} on {snapshot_date}.")
-        st.stop()
 
-    first_name = user_data['First_Name'].values[0] if 'First_Name' in user_data.columns else selected_rep
-    st.markdown(
-        f"<h3 style='text-align: center;'>🕰️ Snapshot for {first_name} — {yesterday.strftime('%B %d, %Y')}</h3>",
-        unsafe_allow_html=True
-    )
+    # ---- Personal Stats (only shown if rep has data)
+    if not user_data.empty:
+        first_name = user_data['First_Name'].values[0] if ('First_Name' in user_data.columns) else selected_rep.split('@')[0].title()
+        st.markdown(
+            f"<h3 style='text-align: center;'>🕰️ Snapshot for {first_name} — {yesterday.strftime('%B %d, %Y')}</h3>",
+            unsafe_allow_html=True
+        )
+        user_calls = int(user_data['Calls'].values[0])
+        user_wins = int(user_data['Wins'].values[0])
+        personal_conversion = (user_wins / user_calls * 100) if user_calls > 0 else 0
+        st.markdown(f"<h3 style='text-align: center;'>📞 {user_calls} Calls | 🏆 {user_wins} Wins | 🎯 {personal_conversion:.2f}% Conversion</h3>", unsafe_allow_html=True)
 
-    # ---- Your Stats
-    user_calls = int(user_data['Calls'].values[0])
-    user_wins = int(user_data['Wins'].values[0])
-    personal_conversion = (user_wins / user_calls * 100) if user_calls > 0 else 0
-
-    st.markdown(f"<h3 style='text-align: center;'>📞 {user_calls} Calls | 🏆 {user_wins} Wins | 🎯 {personal_conversion:.2f}% Conversion</h3>", unsafe_allow_html=True)
-
-    # ---- Team Info
-    team_name = user_data['Team Name'].values[0] if 'Team Name' in user_data.columns else "Unknown"
-    team_logo = f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{team_name.replace(' ', '_').lower()}.png' width='80'>" if pd.notna(team_name) else ""
-
-    st.markdown(f"<div style='text-align: center;'>{team_logo}<br><b>{team_name} (Yesterday)</b></div>", unsafe_allow_html=True)
+        # ---- Team Info
+        team_name = user_data['Team Name'].values[0] if ('Team Name' in user_data.columns) else "Unknown"
+        team_logo = f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{team_name.replace(' ', '_').lower()}.png' width='80'>" if pd.notna(team_name) else ""
+        st.markdown(f"<div style='text-align: center;'>{team_logo}<br><b>{team_name} (Yesterday)</b></div>", unsafe_allow_html=True)
+    else:
+        team_name = None
 
     # 🔧 Fix string columns so we can safely compare and calculate
     numeric_cols = ['Calls', 'Wins', 'Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']
@@ -1527,31 +2014,32 @@ with tab4:
     team_totals['Conversion'] = (team_totals['Total_Wins'] / team_totals['Total_Calls']) * 100
     team_totals['Rank'] = team_totals['Conversion'].rank(ascending=False, method='min').astype(int)
 
-    team_rank = team_totals.loc[team_totals['Team Name'] == team_name, 'Rank'].values[0] if team_name in team_totals['Team Name'].values else "N/A"
-    st.markdown(f"<div style='text-align: center; font-size: 18px;'>🏅 Team Rank Yesterday: <b>{team_rank}</b></div>", unsafe_allow_html=True)
+    if team_name:
+        team_rank = team_totals.loc[team_totals['Team Name'] == team_name, 'Rank'].values[0] if team_name in team_totals['Team Name'].values else "N/A"
+        st.markdown(f"<div style='text-align: center; font-size: 18px;'>🏅 Team Rank Yesterday: <b>{team_rank}</b></div>", unsafe_allow_html=True)
 
-    # ---- Team Averages
-    team_df = yesterday_df[yesterday_df['Team Name'] == team_name].copy()
-    services = ['Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']
-    for svc in services:
-        team_df[svc] = pd.to_numeric(team_df.get(svc, 0), errors='coerce').fillna(0)
+        # ---- Team Averages
+        team_df = yesterday_df[yesterday_df['Team Name'] == team_name].copy()
+        services = ['Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']
+        for svc in services:
+            team_df[svc] = pd.to_numeric(team_df.get(svc, 0), errors='coerce').fillna(0)
 
-    team_total_calls = team_df['Calls'].sum()
-    team_total_wins = team_df['Wins'].sum()
-    team_conversion_rate = (team_total_wins / team_total_calls * 100) if team_total_calls > 0 else 0
-    team_attach_total = team_df[services].sum(axis=1).sum()
-    team_attach_rate = (team_attach_total / team_total_wins * 100) if team_total_wins > 0 else 0
-    team_lt = team_df['Lawn Treatment'].sum()
-    team_lt_attach = (team_lt / team_total_wins * 100) if team_total_wins > 0 else 0
+        team_total_calls = team_df['Calls'].sum()
+        team_total_wins = team_df['Wins'].sum()
+        team_conversion_rate = (team_total_wins / team_total_calls * 100) if team_total_calls > 0 else 0
+        team_attach_total = team_df[services].sum(axis=1).sum()
+        team_attach_rate = (team_attach_total / team_total_wins * 100) if team_total_wins > 0 else 0
+        team_lt = team_df['Lawn Treatment'].sum()
+        team_lt_attach = (team_lt / team_total_wins * 100) if team_total_wins > 0 else 0
 
-    st.markdown(f"""
-    <div style='text-align:center; font-size: 18px; margin-top: 10px;'>
-        <b>Team Averages (Yesterday)</b><br>
-        🎯 Conversion: {team_conversion_rate:.2f}%<br>
-        🧩 All-In Attach: {team_attach_rate:.2f}%<br>
-        🌱 Lawn Treatment Attach: {team_lt_attach:.2f}%
-    </div>
-    """, unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style='text-align:center; font-size: 18px; margin-top: 10px;'>
+            <b>Team Averages (Yesterday)</b><br>
+            🎯 Conversion: {team_conversion_rate:.2f}%<br>
+            🧩 All-In Attach: {team_attach_rate:.2f}%<br>
+            🌱 Lawn Treatment Attach: {team_lt_attach:.2f}%
+        </div>
+        """, unsafe_allow_html=True)
 
 
 
@@ -1694,6 +2182,12 @@ with tab5:
     cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H')  # refreshes hourly
 
     history_df = load_history(cache_bust_key)
+    if 'Name_Proper' not in history_df.columns:
+        history_df['Name_Proper'] = (
+            history_df['First_Name'].astype(str).str.strip()
+            + ' '
+            + history_df['Last_Name'].astype(str).str.strip()
+        ).str.strip()
     # --- Live Base Goals from Avatar Leaderboard sheet ---
     BONUS_SHEET_URL = (
         "https://docs.google.com/spreadsheets/d/"
@@ -1748,6 +2242,17 @@ with tab5:
 
     # Filter reps under selected team lead
     team_df = df[df['Manager_Direct'] == selected_lead].copy()
+    if 'Name_Proper' not in team_df.columns:
+        if 'Full_Name' in team_df.columns:
+            team_df['Name_Proper'] = team_df['Full_Name']
+        elif 'First_Name' in team_df.columns and 'Last_Name' in team_df.columns:
+            team_df['Name_Proper'] = (
+                team_df['First_Name'].astype(str).str.strip()
+                + ' '
+                + team_df['Last_Name'].astype(str).str.strip()
+            ).str.strip()
+        else:
+            team_df['Name_Proper'] = team_df['Rep'].astype(str)
 
     # Determine team name from the lead's reps
     team_name = team_df['Team Name'].dropna().astype(str).unique()[0] if not team_df.empty else "Unknown"
@@ -1764,7 +2269,7 @@ with tab5:
     team_totals['Conversion'] = (team_totals['Total_Wins'] / team_totals['Total_Calls']) * 100
     team_totals['Rank'] = team_totals['Conversion'].rank(ascending=False, method='min').astype(int)
 
-    # Extract this team’s rank
+    # Extract this team's rank
     team_rank = int(team_totals.loc[team_totals['Team Name'] == team_name, 'Rank'].values[0]) if team_name in team_totals['Team Name'].values else "N/A"
 
     # ---- TEAM STATS ----
@@ -1890,10 +2395,10 @@ with tab5:
         </div>
         """, unsafe_allow_html=True)
 
-        # 🌱 Today’s Team Averages — Styled Block
+        # 🌱 Today's Team Averages — Styled Block
         st.markdown(f"""
         <div style='text-align: center; font-size: 18px; margin-top: 10px;'>
-            <b>{team_name} — Today’s Team Averages:</b><br>
+            <b>{team_name} — Today's Team Averages:</b><br>
             🧮 Conversion: {avg_conversion:.2f}%<br>
             🧩 All-In Attach: {avg_attach:.2f}%<br>
             🍃 Lawn Treatment Attach: {avg_lt:.2f}%
@@ -1992,7 +2497,7 @@ with tab5:
                 st.markdown("What will you spend your bonus on — a new mower or margarita pitcher? 😎")
 
             else:
-                st.warning("No bonus just yet — but you’re not far! Let's mow down those goals:")
+                st.warning("No bonus just yet — but you're not far! Let's mow down those goals:")
 
             # --- HISTORY SHEET CALC ---
             st.markdown("### 🧠 What You Need to Hit Bonus Goals based on google form attach entries")
@@ -2076,7 +2581,7 @@ with tab5:
                 for line in needs:
                     st.markdown(f"- {line}")
             else:
-                st.success("You’re crushing it — your team is currently hitting **all 4 base goals** 💪 Time to rake in that bonus! 🌿💸")
+                st.success("You're crushing it — your team is currently hitting **all 4 base goals** 💪 Time to rake in that bonus! 🌿💸")
 
             # --- POINT CHART ---
             st.caption("Team Leads earn bonus pay based on their team's performance in 4 metrics. All base thresholds must be met to qualify.")
@@ -2326,6 +2831,12 @@ with tab6:
     df = load_data()
     cache_bust_key = datetime.now(eastern).strftime("%Y-%m-%d-%H")
     history_df = load_history(cache_bust_key)
+    if 'Name_Proper' not in history_df.columns:
+        history_df['Name_Proper'] = (
+            history_df['First_Name'].astype(str).str.strip()
+            + ' '
+            + history_df['Last_Name'].astype(str).str.strip()
+        ).str.strip()
 
     # --- Candidate mappings (includes component attach cols so we can derive) ---
     CANDIDATE = {
@@ -2690,7 +3201,7 @@ with tab7:
     # -----------------------
     player = st.session_state.get("selected_rep")
     if not player:
-        player = st.text_input("Who’s playing? (type your name)", key="gamehub_player").strip()
+        player = st.text_input("Who's playing? (type your name)", key="gamehub_player").strip()
         if player:
             st.session_state["selected_rep"] = player
     if not player:
@@ -3225,7 +3736,7 @@ with tab7:
                 if t in tag_hints:
                     hints.append(tag_hints[t])
             if hints:
-                st.info("What you’ve uncovered: " + " • ".join(hints))
+                st.info("What you've uncovered: " + " • ".join(hints))
 
         # After at least 1 question, allow recommendation
         if asked_count >= 1:
