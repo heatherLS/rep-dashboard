@@ -1984,10 +1984,10 @@ with tab4:
         _five9 = _five9[_five9['Agent'].notna() & (_five9['Agent'].astype(str).str.strip() != '') & (_five9['Agent'] != 'Agent')].copy()
         # Use positional column 9 (All in Calls - YESTERDAY) and 15 (Total Wins - YESTERDAY)
         _five9_calls = _raw.iloc[2:, [1, 9]].copy()  # col 1=Email, col 9=All in Calls (YESTERDAY)
-        _five9_calls.columns = ['rep_key', 'five9_calls']
-        _five9_calls['rep_key'] = _five9_calls['rep_key'].astype(str).str.lower().str.strip()
+        _five9_calls.columns = ['_rep_key', 'five9_calls']
+        _five9_calls['_rep_key'] = _five9_calls['_rep_key'].astype(str).str.lower().str.strip()
         _five9_calls['five9_calls'] = pd.to_numeric(_five9_calls['five9_calls'], errors='coerce').fillna(0)
-        _five9_calls = _five9_calls[_five9_calls['rep_key'].str.contains('@lawnstarter.com', na=False)]
+        _five9_calls = _five9_calls[_five9_calls['_rep_key'].str.contains('@lawnstarter.com', na=False)]
 
         yesterday_df = yesterday_df.copy()
         yesterday_df['_rep_key'] = yesterday_df['Rep'].astype(str).str.lower().str.strip()
@@ -2171,12 +2171,20 @@ with tab4:
             lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='30'>" if pd.notna(name) else ""
         )
 
-    lt_display = yesterday_df[yesterday_df['Calls'] > 0].copy()
-    if lt_display.empty:
-        lt_display = yesterday_df[yesterday_df[attach_cols].sum(axis=1) > 0].copy()
-    lt_display['Rank'] = lt_display['Lawn Treatment'].rank(ascending=False, method='min').astype(int)
-    lt_display = lt_display.sort_values(by='Lawn Treatment', ascending=False)
+    lt_display = yesterday_df[yesterday_df[attach_cols].sum(axis=1) > 0].copy()
+    # Sort by total attaches descending
+    lt_display['_total_attaches'] = lt_display[attach_cols].sum(axis=1)
+    lt_display = lt_display.sort_values(by='_total_attaches', ascending=False)
+    lt_display['Rank'] = range(1, len(lt_display) + 1)
 
+    # Flag nan nan rows so we can identify them
+    lt_display['_name_missing'] = (
+        lt_display['First_Name'].astype(str).str.strip().isin(['', 'nan']) |
+        lt_display['Last_Name'].astype(str).str.strip().isin(['', 'nan'])
+    ) if 'First_Name' in lt_display.columns else False
+    lt_display['Full_Name'] = lt_display.apply(
+        lambda r: f"⚠️ {r['Rep']}" if r['_name_missing'] else r['Full_Name'], axis=1
+    )
 
     # Display columns
     display_cols = ['Rank', 'Full_Name'] + attach_cols + ['Team_Logo']
