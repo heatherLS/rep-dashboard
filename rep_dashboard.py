@@ -714,8 +714,8 @@ if page == "📊 Leaderboard":
         # Today's stats from live df
         _me_today = df[df['Rep'].astype(str).str.lower().str.strip() == viewed_email]
         _conv_today  = _pct(_me_today['Conversion'].values[0])  if not _me_today.empty else 0.0
-        _wins_today  = int(pd.to_numeric(_me_today['Wins'].values[0], errors='coerce'))   if not _me_today.empty else 0
-        _calls_today = int(pd.to_numeric(_me_today['Calls'].values[0], errors='coerce'))  if not _me_today.empty else 0
+        _wins_today  = int(pd.to_numeric(_me_today['Wins'].values[0],  errors='coerce') or 0) if not _me_today.empty else 0
+        _calls_today = int(pd.to_numeric(_me_today['Calls'].values[0], errors='coerce') or 0) if not _me_today.empty else 0
         if _conv_today < 1.0 and _conv_today > 0:
             _conv_today *= 100
 
@@ -2296,8 +2296,9 @@ if page == "👩‍💻 Team Lead Dashboard":
             _tl_default = manager_directs.index(_tl_name_fmt)
     selected_lead = st.selectbox("Select Your Name (Team Lead):", manager_directs, index=_tl_default)
 
-    # Filter reps under selected team lead
-    team_df = df[df['Manager_Direct'] == selected_lead].copy()
+    # Filter reps under selected team lead + always show Team ABC (new hires in training)
+    _in_training = df['Team Name'].astype(str).str.strip().str.lower() == 'team abc'
+    team_df = df[(df['Manager_Direct'] == selected_lead) | _in_training].copy()
     if 'Name_Proper' not in team_df.columns:
         if 'Full_Name' in team_df.columns:
             team_df['Name_Proper'] = team_df['Full_Name']
