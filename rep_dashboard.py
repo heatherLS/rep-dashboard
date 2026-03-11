@@ -216,7 +216,8 @@ def load_history(_cache_bust_key: str):
 
 
 
-def load_data():
+@st.cache_data(show_spinner=False)
+def load_data(_cache_bust_key: str):
     df = pd.read_csv(sheet_url, header=1)
 
     # Enrich today's attach metrics with Redshift data (hourly CSV sync)
@@ -681,17 +682,18 @@ def render_pool_splash_banners(df: pd.DataFrame):
 
 if page == "📊 Leaderboard":
     st.markdown("<h1 style='text-align: center;'>📊 Conversion Rate Leaderboard</h1>", unsafe_allow_html=True)
-    df = load_data().copy()
 
     from pytz import timezone
     eastern = timezone('US/Eastern')
     today = datetime.now(eastern).date()
+    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H')
+
+    df = load_data(cache_bust_key).copy()
 
     # 🧹 Clean headers and strip spaces
     df.columns = df.columns.str.strip()
 
     # Pull fresh history for records/champions
-    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H')
     history_df = load_history(cache_bust_key).copy()
     history_df.columns = history_df.columns.str.strip()
 
@@ -2221,12 +2223,11 @@ if page == "📅 Yesterday":
 
 if page == "👩‍💻 Team Lead Dashboard":
 
-    df = load_data().copy()
-
     from pytz import timezone
     eastern = timezone('US/Eastern')
     cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H')  # refreshes hourly
 
+    df = load_data(cache_bust_key).copy()
     history_df = load_history(cache_bust_key).copy()
     if 'Name_Proper' not in history_df.columns:
         history_df['Name_Proper'] = (
@@ -2882,8 +2883,8 @@ if page == "Senior Manager View":
         return " ".join(s.split())
 
     # --- Load frames from your existing functions ---
-    df = load_data().copy()
     cache_bust_key = datetime.now(eastern).strftime("%Y-%m-%d-%H")
+    df = load_data(cache_bust_key).copy()
     history_df = load_history(cache_bust_key).copy()
     if 'Name_Proper' not in history_df.columns:
         history_df['Name_Proper'] = (
