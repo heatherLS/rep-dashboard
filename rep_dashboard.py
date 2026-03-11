@@ -681,7 +681,7 @@ def render_pool_splash_banners(df: pd.DataFrame):
 
 if page == "📊 Leaderboard":
     st.markdown("<h1 style='text-align: center;'>📊 Conversion Rate Leaderboard</h1>", unsafe_allow_html=True)
-    df = load_data()
+    df = load_data().copy()
 
     from pytz import timezone
     eastern = timezone('US/Eastern')
@@ -692,7 +692,7 @@ if page == "📊 Leaderboard":
 
     # Pull fresh history for records/champions
     cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H')
-    history_df = load_history(cache_bust_key)
+    history_df = load_history(cache_bust_key).copy()
     history_df.columns = history_df.columns.str.strip()
 
     # -----------------------------------------------------------------------
@@ -1823,7 +1823,7 @@ if page == "💰Bonus & History":
     from pytz import timezone as _tz
     _eastern = _tz('US/Eastern')
     _pb_cache_key = datetime.now(_eastern).strftime('%Y-%m-%d-%H')
-    history_df = load_history(_pb_cache_key)
+    history_df = load_history(_pb_cache_key).copy()
     history_df.columns = history_df.columns.str.strip()
 
     # Filter all rows for the selected rep
@@ -1939,11 +1939,11 @@ if page == "📅 Yesterday":
     eastern = timezone('US/Eastern')
     cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H')  # refreshes hourly
 
-    history_df = load_history(cache_bust_key)
+    history_df = load_history(cache_bust_key).copy()
     history_df.columns = history_df.columns.str.strip()
 
 
-   
+
     # 🧠 Yesterday = actual performance day
     from pytz import timezone
     eastern = timezone('US/Eastern')
@@ -2221,13 +2221,13 @@ if page == "📅 Yesterday":
 
 if page == "👩‍💻 Team Lead Dashboard":
 
-    df = load_data()
+    df = load_data().copy()
 
     from pytz import timezone
     eastern = timezone('US/Eastern')
     cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H')  # refreshes hourly
 
-    history_df = load_history(cache_bust_key)
+    history_df = load_history(cache_bust_key).copy()
     if 'Name_Proper' not in history_df.columns:
         history_df['Name_Proper'] = (
             history_df['First_Name'].astype(str).str.strip()
@@ -2882,9 +2882,9 @@ if page == "Senior Manager View":
         return " ".join(s.split())
 
     # --- Load frames from your existing functions ---
-    df = load_data()
+    df = load_data().copy()
     cache_bust_key = datetime.now(eastern).strftime("%Y-%m-%d-%H")
-    history_df = load_history(cache_bust_key)
+    history_df = load_history(cache_bust_key).copy()
     if 'Name_Proper' not in history_df.columns:
         history_df['Name_Proper'] = (
             history_df['First_Name'].astype(str).str.strip()
