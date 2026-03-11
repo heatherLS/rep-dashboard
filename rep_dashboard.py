@@ -248,8 +248,9 @@ def load_data(_cache_bust_key: str):
                         df.drop(columns=[f'{col}_rs'], inplace=True)
 
                 df.drop(columns=['_rep_key'], inplace=True)
-    except Exception:
-        pass  # Any failure silently falls back to Google Sheet only
+    except Exception as _e:
+        import traceback
+        print(f"[load_data] rep_history.csv enrichment failed: {_e}\n{traceback.format_exc()}")
 
     return df
 
@@ -686,7 +687,7 @@ if page == "📊 Leaderboard":
     from pytz import timezone
     eastern = timezone('US/Eastern')
     today = datetime.now(eastern).date()
-    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H')
+    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H-') + ('30' if datetime.now(eastern).minute >= 30 else '00')
 
     df = load_data(cache_bust_key).copy()
 
@@ -1824,7 +1825,7 @@ if page == "💰Bonus & History":
     # Load personal bests using shared load_history (CSV preferred, Sheet fallback)
     from pytz import timezone as _tz
     _eastern = _tz('US/Eastern')
-    _pb_cache_key = datetime.now(_eastern).strftime('%Y-%m-%d-%H')
+    _pb_cache_key = datetime.now(_eastern).strftime('%Y-%m-%d-%H-') + ('30' if datetime.now(_eastern).minute >= 30 else '00')
     history_df = load_history(_pb_cache_key).copy()
     history_df.columns = history_df.columns.str.strip()
 
@@ -1939,7 +1940,7 @@ if page == "📅 Yesterday":
 
     from pytz import timezone
     eastern = timezone('US/Eastern')
-    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H')  # refreshes hourly
+    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H-') + ('30' if datetime.now(eastern).minute >= 30 else '00')
 
     history_df = load_history(cache_bust_key).copy()
     history_df.columns = history_df.columns.str.strip()
@@ -2225,7 +2226,7 @@ if page == "👩‍💻 Team Lead Dashboard":
 
     from pytz import timezone
     eastern = timezone('US/Eastern')
-    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H')  # refreshes hourly
+    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H-') + ('30' if datetime.now(eastern).minute >= 30 else '00')
 
     df = load_data(cache_bust_key).copy()
     history_df = load_history(cache_bust_key).copy()
@@ -2883,7 +2884,7 @@ if page == "Senior Manager View":
         return " ".join(s.split())
 
     # --- Load frames from your existing functions ---
-    cache_bust_key = datetime.now(eastern).strftime("%Y-%m-%d-%H")
+    cache_bust_key = datetime.now(eastern).strftime("%Y-%m-%d-%H-") + ("30" if datetime.now(eastern).minute >= 30 else "00")
     df = load_data(cache_bust_key).copy()
     history_df = load_history(cache_bust_key).copy()
     if 'Name_Proper' not in history_df.columns:
