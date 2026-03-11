@@ -101,15 +101,17 @@ if is_sm:
     view_options = ["— View as... —"] + all_reps
     view_label   = "👁 Senior Manager: View as rep"
 elif is_tl:
+    auth_last = auth_row['Last_Name'].values[0].strip() if not auth_row.empty else ""
+    # Manager_Direct is stored as "Last, First" — build all likely formats to match against
+    _tl_variants = {
+        auth_first.lower(),                                          # "mona"
+        f"{auth_first} {auth_last}".lower(),                        # "mona lapuz"
+        f"{auth_last}, {auth_first}".lower(),                       # "lapuz, mona"
+        f"{auth_last},{auth_first}".lower(),                        # "lapuz,mona"
+    }
     team_reps = roster_auth[
-        roster_auth['Manager_Direct'].str.strip().str.lower() == auth_first.lower()
+        roster_auth['Manager_Direct'].str.strip().str.lower().isin(_tl_variants)
     ]['rep_key'].tolist()
-    # fallback: match by exact name in Manager_Direct column
-    if not team_reps:
-        full_name = f"{auth_first} {auth_row['Last_Name'].values[0].strip()}" if not auth_row.empty else auth_first
-        team_reps = roster_auth[
-            roster_auth['Manager_Direct'].str.strip() == full_name
-        ]['rep_key'].tolist()
     view_options = [auth_key] + sorted(set(team_reps) - {auth_key})
     view_label   = "👁 Team Lead: View as rep"
 else:
@@ -2283,8 +2285,16 @@ with tab5:
     BASE_QA     = coalesce_num(base_goals.get("QA"), 80.0)
 
     # ---- SELECT TEAM LEAD ----
-    manager_directs = df['Manager_Direct'].dropna().unique()
-    selected_lead = st.selectbox("Select Your Name (Team Lead):", sorted(manager_directs))
+    manager_directs = sorted(df['Manager_Direct'].dropna().unique())
+    # Pre-select the logged-in TL's name if it matches a Manager_Direct entry
+    _tl_default = 0
+    if is_tl and not auth_row.empty:
+        _auth_last = auth_row['Last_Name'].values[0].strip()
+        _auth_first_name = auth_row['First_Name'].values[0].strip()
+        _tl_name_fmt = f"{_auth_last}, {_auth_first_name}"  # "Lapuz, Mona"
+        if _tl_name_fmt in manager_directs:
+            _tl_default = manager_directs.index(_tl_name_fmt)
+    selected_lead = st.selectbox("Select Your Name (Team Lead):", manager_directs, index=_tl_default)
 
     # Filter reps under selected team lead
     team_df = df[df['Manager_Direct'] == selected_lead].copy()
