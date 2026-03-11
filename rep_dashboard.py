@@ -163,8 +163,8 @@ st.markdown(
 
 st.title("🌟 Sales Rep Performance Dashboard")
 
-# 🔁 Auto-refresh every 60 seconds (60000 ms)
-st_autorefresh(interval=60000, key="datarefresh")
+# 🔁 Auto-refresh every 30 minutes (1800000 ms)
+st_autorefresh(interval=1800000, key="datarefresh")
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 Leaderboard", "🧮 Calculator", "💰Bonus & History", "📅 Yesterday", "👩‍💻 Team Lead Dashboard", "Senior Manager View", "Game Hub"])
 
@@ -206,7 +206,7 @@ def load_history(_cache_bust_key: str):
 
 
 
-
+@st.cache_data(show_spinner=False, ttl=60)
 def load_data():
     df = pd.read_csv(sheet_url, header=1)
 
