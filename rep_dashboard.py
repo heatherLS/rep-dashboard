@@ -206,7 +206,6 @@ def load_history(_cache_bust_key: str):
 
 
 
-@st.cache_data(show_spinner=False, ttl=60)
 def load_data():
     df = pd.read_csv(sheet_url, header=1)
 
