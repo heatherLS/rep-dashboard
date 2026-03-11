@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -169,8 +170,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 Leaderboard", "🧮 Ca
 sheet_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=171451260"
 
 history_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=303010891"
-# Hardcoded absolute path so Streamlit always finds the CSV regardless of working directory
-_HISTORY_CSV = "/Users/heatherpainter/Desktop/rep_dashboard_project/data/rep_history.csv"
+_HISTORY_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "rep_history.csv")
 
 @st.cache_data(show_spinner=False)
 def load_history(_cache_bust_key: str):
