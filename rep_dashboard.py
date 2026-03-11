@@ -164,9 +164,19 @@ st.markdown(
 st.title("🌟 Sales Rep Performance Dashboard")
 
 # 🔁 Auto-refresh every 30 minutes (1800000 ms)
-#st_autorefresh(interval=1800000, key="datarefresh")
+st_autorefresh(interval=1800000, key="datarefresh")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Leaderboard", "🧮 Calculator", "💰Bonus & History", "📅 Yesterday", "👩‍💻 Team Lead Dashboard", "Senior Manager View"])
+page = st.selectbox(
+    "Choose a page",
+    [
+        "📊 Leaderboard",
+        "🧮 Calculator",
+        "💰Bonus & History",
+        "📅 Yesterday",
+        "👩‍💻 Team Lead Dashboard",
+        "Senior Manager View"
+    ]
+)
 
 # ---- Shared Config ----
 sheet_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=171451260"
@@ -669,7 +679,7 @@ def render_pool_splash_banners(df: pd.DataFrame):
     st.balloons()
 
 
-with tab1:
+if page == "📊 Leaderboard":
     st.markdown("<h1 style='text-align: center;'>📊 Conversion Rate Leaderboard</h1>", unsafe_allow_html=True)
     df = load_data()
 
@@ -1483,18 +1493,7 @@ with tab1:
 # --------------------------------------------
 # 🧮 TAB 2: Calculator
 # --------------------------------------------
-with tab2:
-    # ... (calculator code remains unchanged)
-    pass
-
-st.markdown("---")
-st.caption("Built with 💚 by Heather & ChatGPT")
-
-
-# --------------------------------------------
-# 🧮 TAB 2: Calculator
-# --------------------------------------------
-with tab2:
+if page == "🧮 Calculator":
     st.header("🌿 Attach Rate Calculator")
 
     default_targets = {
@@ -1562,7 +1561,7 @@ with tab2:
 # ---------------------------------------------------
 # 🔥 TAB 3: Bonus Dashboard
 # ---------------------------------------------------
-with tab3:
+if page == "💰Bonus & History":
     st.header("🔥 Bonus & History")
     
     import random
@@ -1933,7 +1932,7 @@ with tab3:
 # --------------------------------------------
 # 📅 TAB 4: Yesterday's Snapshot
 # --------------------------------------------
-with tab4:
+if page == "📅 Yesterday":
     st.markdown("<h1 style='text-align: center;'>📅 Yesterday's Leaderboard</h1>", unsafe_allow_html=True)
 
     from pytz import timezone
@@ -2220,7 +2219,7 @@ with tab4:
 # 👩‍💻 TAB 5:  Team Lead Dashboard
 # --------------------------------------------
 
-with tab5:
+if page == "👩‍💻 Team Lead Dashboard":
 
     df = load_data()
 
@@ -2792,7 +2791,7 @@ with tab5:
 # ----------------------------
 # 🏆 TAB 6: Senior Manager View
 # ----------------------------
-with tab6:
+if page == "Senior Manager View":
     from math import ceil
     from datetime import datetime, timedelta
     from pytz import timezone
