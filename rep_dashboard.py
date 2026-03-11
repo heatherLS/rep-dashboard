@@ -170,7 +170,10 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 Leaderboard", "🧮 Ca
 sheet_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=171451260"
 
 history_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=303010891"
+# Try __file__-relative first, then fall back to cwd-relative (works on Streamlit Cloud)
 _HISTORY_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "rep_history.csv")
+if not os.path.exists(_HISTORY_CSV):
+    _HISTORY_CSV = os.path.join(os.getcwd(), "data", "rep_history.csv")
 
 @st.cache_data(show_spinner=False)
 def load_history(_cache_bust_key: str):
@@ -2002,10 +2005,12 @@ with tab4:
             yesterday_df[col] = pd.to_numeric(yesterday_df[col], errors='coerce').fillna(0)
 
 
-    # ---- Team Rank
+    # ---- Team Rank (fall back to Wins if Calls unavailable)
     team_stats = yesterday_df[yesterday_df['Calls'] > 0].copy()
-    team_stats['Calls'] = pd.to_numeric(team_stats['Calls'], errors='coerce')
-    team_stats['Wins'] = pd.to_numeric(team_stats['Wins'], errors='coerce')
+    if team_stats.empty:
+        team_stats = yesterday_df[yesterday_df['Wins'] > 0].copy()
+    team_stats['Calls'] = pd.to_numeric(team_stats['Calls'], errors='coerce').fillna(0)
+    team_stats['Wins'] = pd.to_numeric(team_stats['Wins'], errors='coerce').fillna(0)
 
     team_totals = team_stats.groupby("Team Name").agg(
         Total_Calls=("Calls", "sum"),
@@ -2044,11 +2049,16 @@ with tab4:
 
 
 
-    # ---- Top 3 Reps (Conversion)
+    # ---- Top 3 Reps (Conversion, or Wins if Calls unavailable)
     active_df = yesterday_df[yesterday_df['Calls'] > 0].copy()
-    active_df['Conversion'] = (active_df['Wins'] / active_df['Calls']) * 100
+    if active_df.empty:
+        # Calls not yet available (T+1) — fall back to anyone with wins
+        active_df = yesterday_df[yesterday_df['Wins'] > 0].copy()
+        active_df['Conversion'] = 0.0
+    else:
+        active_df['Conversion'] = (active_df['Wins'] / active_df['Calls']) * 100
     active_df['Full_Name'] = active_df['First_Name'].astype(str).str.strip() + ' ' + active_df['Last_Name'].astype(str).str.strip()
-    active_df = active_df.sort_values(by='Conversion', ascending=False)
+    active_df = active_df.sort_values(by=['Conversion', 'Wins'], ascending=False)
 
     st.markdown("<h3 style='text-align: center;'>🏅 Top 3 Reps (Yesterday)</h3>", unsafe_allow_html=True)
     medals = ["🥇", "🥈", "🥉"]
@@ -2135,7 +2145,9 @@ with tab4:
             lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='30'>" if pd.notna(name) else ""
         )
 
-    lt_display = yesterday_df[yesterday_df['Calls'] > 0].copy()  # 👈 Only reps with >0 calls
+    lt_display = yesterday_df[yesterday_df['Calls'] > 0].copy()
+    if lt_display.empty:
+        lt_display = yesterday_df[yesterday_df[attach_cols].sum(axis=1) > 0].copy()
     lt_display['Rank'] = lt_display['Lawn Treatment'].rank(ascending=False, method='min').astype(int)
     lt_display = lt_display.sort_values(by='Lawn Treatment', ascending=False)
 
