@@ -229,52 +229,64 @@ def sync(today_only: bool = False):
     conn.close()
 
     # ---------------------------------------------------------------------------
-    # ---------------------------------------------------------------------------
-    # Load team roster from Google Sheet (Team Name, Manager_Direct)
+    # Load roster data from two tabs:
+    #   SalesRoster (gid=664880618) → sales-only allowlist + names
+    #   RepData     (gid=171451260) → Team Name + Manager_Direct assignments
     # ---------------------------------------------------------------------------
     print("  Fetching team roster from Google Sheet...")
-    ROSTER_URL = (
+    SALES_ROSTER_URL = (
+        "https://docs.google.com/spreadsheets/d/"
+        "1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU"
+        "/export?format=csv&gid=664880618"
+    )
+    REPDATA_URL = (
         "https://docs.google.com/spreadsheets/d/"
         "1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU"
         "/export?format=csv&gid=171451260"
     )
-    SALES_ROLES = {'Sales Tier 1', 'Tier 2 Sales', 'Team Lead', 'Trainee'}
     try:
-        # Read raw (row 0 is a date header, row 1 is column names)
-        raw = pd.read_csv(ROSTER_URL, header=None)
-        raw.columns = raw.iloc[1]
-        raw = raw.iloc[2:].reset_index(drop=True)
-        raw.columns = raw.columns.str.strip()
-        roster = raw[raw['Rep'].notna() & (raw['Rep'].astype(str).str.strip() != '')].copy()
-        roster['rep_key'] = roster['Rep'].str.lower().str.strip()
-        roster['Team Name'] = roster['Team Name'].astype(str).str.strip().replace({'nan': '', '': None})
+        # --- SalesRoster: allowlist + names ---
+        sr_raw = pd.read_csv(SALES_ROSTER_URL, header=0)
+        sr_raw.columns = sr_raw.columns.str.strip()
+        sr = sr_raw[sr_raw['Lawnstarter_Email'].notna()].copy()
+        sr = sr[sr['Lawnstarter_Email'].astype(str).str.strip() != '']
+        sr['rep_key'] = sr['Lawnstarter_Email'].str.lower().str.strip()
+        sr['First_Name'] = sr['First_Name'].astype(str).str.strip()
+        sr['Last_Name'] = sr['Last_Name'].astype(str).str.strip()
+        sales_emails = set(sr['rep_key'])
+        name_map = sr[['rep_key', 'First_Name', 'Last_Name']].drop_duplicates('rep_key')
+        print(f"  SalesRoster: {len(sales_emails)} sales reps (allowlist)")
 
-        # Infer missing team names from Manager_Direct → team of reps who share that manager
-        has_team = roster[roster['Team Name'].notna()]
+        # --- RepData: Team Name + Manager_Direct ---
+        rd_raw = pd.read_csv(REPDATA_URL, header=None)
+        rd_raw.columns = rd_raw.iloc[1]
+        rd_raw = rd_raw.iloc[2:].reset_index(drop=True)
+        rd_raw = rd_raw.loc[:, rd_raw.columns.notna() & (rd_raw.columns.astype(str).str.strip() != 'nan')]
+        rd_raw.columns = rd_raw.columns.str.strip()
+        rd = rd_raw[rd_raw['Rep'].notna() & (rd_raw['Rep'].astype(str).str.strip() != '')].copy()
+        rd['rep_key'] = rd['Rep'].str.lower().str.strip()
+        rd['Team Name'] = rd['Team Name'].astype(str).str.strip().replace({'nan': None, '': None})
+        team_map = rd[['rep_key', 'Team Name', 'Manager_Direct']].drop_duplicates('rep_key')
+        print(f"  RepData: {len(team_map)} reps with team assignments")
+
+        # Build mgr → team fallback for reps missing a team in RepData
+        has_team = team_map[team_map['Team Name'].notna()]
         mgr_to_team = (
             has_team.groupby('Manager_Direct')['Team Name']
             .agg(lambda x: x.mode()[0])
             .to_dict()
         )
-        def resolve_team(row):
-            if pd.notna(row['Team Name']) and row['Team Name']:
-                return row['Team Name']
-            mgr = str(row.get('Manager_Direct', '')).strip()
-            return mgr_to_team.get(mgr, None)
 
-        roster['Team Name'] = roster.apply(resolve_team, axis=1)
+        # Combine: merge names + team into one roster_map
+        roster_map = name_map.merge(team_map, on='rep_key', how='left')
+        roster_map['Team Name'] = roster_map['Team Name'].fillna(
+            roster_map['Manager_Direct'].map(mgr_to_team)
+        )
 
-        # Tag each rep as sales or non-sales
-        roster['is_sales'] = roster['Current_Role'].isin(SALES_ROLES)
-        roster_map = roster[['rep_key', 'Team Name', 'Manager_Direct', 'is_sales']].drop_duplicates('rep_key')
-        sales_emails = set(roster_map.loc[roster_map['is_sales'], 'rep_key'])
-        non_sales_emails = set(roster_map.loc[~roster_map['is_sales'], 'rep_key'])
-        print(f"  Roster loaded: {len(sales_emails)} sales reps, {len(non_sales_emails)} excluded (non-sales)")
     except Exception as e:
-        print(f"  Warning: could not load roster ({e}). Team Name will be 'Unknown'.")
-        roster_map = pd.DataFrame(columns=['rep_key', 'Team Name', 'Manager_Direct', 'is_sales'])
+        print(f"  Warning: could not load roster ({e}). Team Name will be 'Unknown', no name fallback.")
+        roster_map = pd.DataFrame(columns=['rep_key', 'First_Name', 'Last_Name', 'Team Name', 'Manager_Direct'])
         sales_emails = set()
-        non_sales_emails = set()
 
     # ---------------------------------------------------------------------------
     # Build rep×date spine from all sources (union, not just wins)
@@ -326,9 +338,17 @@ def sync(today_only: bool = False):
             spine_parts.append(df[['Date', 'Rep']].drop_duplicates())
     spine = pd.concat(spine_parts, ignore_index=True).drop_duplicates(['Date', 'Rep'])
 
-    # Carry First_Name / Last_Name from wins onto spine
+    # First_Name / Last_Name: prefer wins query, fall back to roster
     name_df = wins_df[['Date', 'Rep', 'First_Name', 'Last_Name']].drop_duplicates(['Date', 'Rep'])
     spine = spine.merge(name_df, on=['Date', 'Rep'], how='left')
+    # Fill missing names from roster
+    if 'First_Name' in roster_map.columns and 'Last_Name' in roster_map.columns:
+        name_fill = roster_map[['rep_key', 'First_Name', 'Last_Name']].copy()
+        name_fill = name_fill.rename(columns={'rep_key': 'Rep', 'First_Name': '_fn', 'Last_Name': '_ln'})
+        spine = spine.merge(name_fill, on='Rep', how='left')
+        spine['First_Name'] = spine['First_Name'].where(spine['First_Name'].notna() & (spine['First_Name'].astype(str) != 'nan'), spine['_fn'])
+        spine['Last_Name'] = spine['Last_Name'].where(spine['Last_Name'].notna() & (spine['Last_Name'].astype(str) != 'nan'), spine['_ln'])
+        spine.drop(columns=['_fn', '_ln'], inplace=True)
 
     # Merge each metric
     merged = spine.merge(wins_df[['Date', 'Rep', 'Wins']], on=['Date', 'Rep'], how='left')
@@ -339,19 +359,26 @@ def sync(today_only: bool = False):
     merged = merged.merge(pool_df[['Date', 'Rep', 'Pool']], on=['Date', 'Rep'], how='left')
     merged = merged.merge(calls_df[['Date', 'Rep', 'Calls']], on=['Date', 'Rep'], how='left')
 
-    # Merge team roster (Team Name, Manager_Direct, is_sales)
+    # Merge team roster (Team Name, Manager_Direct) — drop name cols already on spine
+    roster_team = roster_map.drop(columns=[c for c in ['First_Name', 'Last_Name'] if c in roster_map.columns])
     merged['rep_key'] = merged['Rep'].str.lower().str.strip()
-    merged = merged.merge(roster_map, on='rep_key', how='left')
+    merged = merged.merge(roster_team, on='rep_key', how='left')
     merged.drop(columns=['rep_key'], inplace=True)
     merged['Team Name'] = merged['Team Name'].fillna('Unknown')
     merged['Manager_Direct'] = merged.get('Manager_Direct', pd.Series('', index=merged.index)).fillna('')
 
-    # Exclude reps who are currently in a non-sales role (retention, ops, managers, etc.)
-    # Keep historical reps not in the current roster (is_sales is NaN) — they were likely sales reps
+    # Filtering logic:
+    # - Current SalesRoster reps → always keep
+    # - Reps NOT on roster but with names from Redshift users table → historical sales reps, keep
+    # - Reps NOT on roster AND no name from Redshift → OPS/retention showing up via Five9 only, exclude
     before = len(merged)
-    merged = merged[merged['is_sales'].isna() | merged['is_sales']]
-    merged.drop(columns=['is_sales'], inplace=True)
-    print(f"  Filtered out {before - len(merged)} rows from non-sales reps")
+    if sales_emails:
+        is_current_sales = merged['Rep'].isin(sales_emails)
+        has_redshift_name = (
+            merged['First_Name'].notna() & (merged['First_Name'].astype(str).str.strip() != 'nan') & (merged['First_Name'].astype(str).str.strip() != '')
+        )
+        merged = merged[is_current_sales | has_redshift_name]
+    print(f"  Filtered out {before - len(merged)} rows from non-sales / unlisted reps")
 
     # Fill NaN numerics with 0
     num_cols = ['Wins', 'Lawn Treatment', 'Mosquito', 'Bush Trimming', 'Flower Bed Weeding',
