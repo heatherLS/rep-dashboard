@@ -1329,7 +1329,7 @@ with tab1:
 
             st.markdown(f"""
             <div style='text-align: center; font-size: 18px; margin-top: 10px; padding: 10px; border-radius: 8px;
-                        background-color: #f0f0f0; color: #333; border: 1px solid #ccc;'>
+                        background-color: rgba(128,128,128,0.15); color: inherit; border: 1px solid rgba(128,128,128,0.4);'>
                 <b>Can your team take the top spot?</b><br><br>
                 🏆 Top Team: <b>{getattr(top_team, "Team Name", getattr(top_team, "Team_Name", "Unknown"))}</b><br>
                 💪 Your Team: <b>{team_name}</b><br><br>
@@ -1350,7 +1350,7 @@ with tab1:
 
         st.markdown(f"""
         <div style='text-align: center; font-size: 18px; margin-top: 10px; padding: 10px; border-radius: 8px;
-                    background-color: rgba(255, 255, 255, 0.05); color: #222; border: 1px solid #444;'>
+                    background-color: rgba(128,128,128,0.15); color: inherit; border: 1px solid rgba(128,128,128,0.4);'>
             <b>Can your team take the top spot?</b><br><br>
             🏆 Top Team: <b>{getattr(top_team, "Team Name", getattr(top_team, "Team_Name", "Unknown"))}</b><br>
             💪 Your Team: <b>{team_name}</b><br><br>
@@ -2370,7 +2370,7 @@ with tab5:
         # ---------- RENDER TOP TEAM CARD ----------
         st.markdown(f"""
         <div style='text-align: center; font-size: 18px; margin-top: 10px; padding: 10px; border-radius: 8px;
-                    background-color: #f0f0f0; color: #333; border: 1px solid #ccc;'>
+                    background-color: rgba(128,128,128,0.15); color: inherit; border: 1px solid rgba(128,128,128,0.4);'>
             <b>Can your team take the top spot?</b><br><br>
             🏆 Top Team: <b>{top_team_name}</b><br>
             💪 Your Team: <b>{team_name}</b><br><br>
