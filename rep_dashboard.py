@@ -1443,6 +1443,18 @@ if page == "📊 Leaderboard":
     # 📋 Full Today Attach Leaderboard — all reps with any attach today
     st.markdown("<hr><h3 style='text-align: center;'>📋 Today's Full Attach Leaderboard</h3>", unsafe_allow_html=True)
 
+    # Last updated timestamp from CSV file mtime
+    try:
+        import os as _os
+        _csv_mtime = _os.path.getmtime(_HISTORY_CSV)
+        from datetime import datetime as _dt
+        from pytz import timezone as _ptz
+        _eastern = _ptz('US/Eastern')
+        _updated_at = _dt.fromtimestamp(_csv_mtime, tz=_eastern).strftime('%b %-d, %Y at %-I:%M %p ET')
+        st.markdown(f"<p style='text-align:center; color:#888; font-size:13px;'>Last synced: {_updated_at}</p>", unsafe_allow_html=True)
+    except Exception:
+        pass
+
     today_attach_cols = ['Pool', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito', 'Leaf Removal', 'Lawn Treatment']
     for c in today_attach_cols:
         if c not in df.columns:
