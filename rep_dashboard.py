@@ -1443,7 +1443,7 @@ if page == "📊 Leaderboard":
     # 📋 Full Today Attach Leaderboard — all reps with any attach today
     st.markdown("<hr><h3 style='text-align: center;'>📋 Today's Full Attach Leaderboard</h3>", unsafe_allow_html=True)
 
-    # Last updated timestamp from CSV file mtime
+    # Last updated timestamp + manual refresh button
     try:
         import os as _os
         _csv_mtime = _os.path.getmtime(_HISTORY_CSV)
@@ -1451,9 +1451,17 @@ if page == "📊 Leaderboard":
         from pytz import timezone as _ptz
         _eastern = _ptz('US/Eastern')
         _updated_at = _dt.fromtimestamp(_csv_mtime, tz=_eastern).strftime('%b %-d, %Y at %-I:%M %p ET')
-        st.markdown(f"<p style='text-align:center; color:#888; font-size:13px;'>Last synced: {_updated_at}</p>", unsafe_allow_html=True)
     except Exception:
-        pass
+        _updated_at = None
+
+    _ts_col, _btn_col = st.columns([4, 1])
+    with _ts_col:
+        if _updated_at:
+            st.markdown(f"<p style='color:#888; font-size:13px; margin-top:8px;'>Last synced: {_updated_at}</p>", unsafe_allow_html=True)
+    with _btn_col:
+        if st.button("🔄 Refresh", key="refresh_attach"):
+            st.cache_data.clear()
+            st.rerun()
 
     today_attach_cols = ['Pool', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito', 'Leaf Removal', 'Lawn Treatment']
     for c in today_attach_cols:
