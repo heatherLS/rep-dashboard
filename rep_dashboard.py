@@ -1566,7 +1566,13 @@ if page == "🧮 Calculator":
 # ---------------------------------------------------
 if page == "💰Bonus & History":
     st.header("🔥 Bonus & History")
-    
+
+    from pytz import timezone
+    eastern = timezone('US/Eastern')
+    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H-') + ('30' if datetime.now(eastern).minute >= 30 else '00')
+    df = load_data(cache_bust_key).copy()
+    df.columns = df.columns.str.strip()
+
     import random
     dummy = random.randint(1, 99999)
     st.markdown(f"<div style='display:none'>{dummy}</div>", unsafe_allow_html=True)
