@@ -236,6 +236,12 @@ def load_data(_cache_bust_key: str):
     # Replaces: Wins, Lawn Treatment, Mosquito, Bush Trimming, Flower Bed Weeding, Leaf Removal
     # Keeps from Sheet: Calls, Conversion, QA, Bonus, rep metadata (no same-day Five9)
     ATTACH_COLS = ['Wins', 'Lawn Treatment', 'Mosquito', 'Bush Trimming', 'Flower Bed Weeding', 'Leaf Removal']
+
+    # Always zero out attach cols — Google Forms data is never used for these
+    for _col in ATTACH_COLS:
+        if _col in df.columns:
+            df[_col] = 0
+
     try:
         from datetime import date as _date
         hist = pd.read_csv(_HISTORY_SHEET_URL)
@@ -251,7 +257,7 @@ def load_data(_cache_bust_key: str):
 
             df = df.merge(rs_today, on='_rep_key', how='left', suffixes=('', '_rs'))
 
-            # Use ONLY Redshift values for attach columns (0 if no Redshift data)
+            # Fill from Redshift (already zeroed above, so NaN → stays 0)
             for col in ATTACH_COLS:
                 if f'{col}_rs' in df.columns:
                     df[col] = df[f'{col}_rs'].fillna(0)
