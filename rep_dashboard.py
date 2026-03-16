@@ -283,7 +283,7 @@ BONUS_SHEET_URL = (
     "/export?format=csv&gid=374383792"
 )
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def load_section_tiers(url: str, section_label: str):
     """
     Returns list of (threshold_percent, points) for a given section label, e.g. "Conversion".
@@ -340,7 +340,7 @@ BONUS_SHEET_URL = (
     "/export?format=csv&gid=374383792"
 )
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def load_section_tiers(url: str, section_label: str):
     import pandas as pd
     def pct(x):
@@ -374,7 +374,7 @@ def get_point_threshold(tiers, points_value, fallback):
     if matches: return float(min(matches))
     return fallback
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def load_all_tiers(url: str):
     metrics = {
         "Conversion": "Conversion",
