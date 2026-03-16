@@ -187,7 +187,7 @@ history_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriH
 _HISTORY_SHEET_URL = (
     "https://docs.google.com/spreadsheets/d/"
     "1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU"
-    "/export?format=csv&sheet=RepHistory"
+    "/export?format=csv&gid=1441799869"
 )
 # Local CSV path (fallback when running locally before sheet is populated)
 _HISTORY_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "rep_history.csv")
