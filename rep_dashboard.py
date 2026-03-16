@@ -183,26 +183,38 @@ sheet_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMF
 
 history_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=303010891"
 # Try __file__-relative first, then fall back to cwd-relative (works on Streamlit Cloud)
+# Primary source: Google Sheet written by the hourly cron job
+_HISTORY_SHEET_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU"
+    "/export?format=csv&sheet=RepHistory"
+)
+# Local CSV path (fallback when running locally before sheet is populated)
 _HISTORY_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "rep_history.csv")
 if not os.path.exists(_HISTORY_CSV):
     _HISTORY_CSV = os.path.join(os.getcwd(), "data", "rep_history.csv")
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=1800)
 def load_history(_cache_bust_key: str):
-    import os
     try:
-        if os.path.exists(_HISTORY_CSV) and os.path.getsize(_HISTORY_CSV) > 0:
-            df = pd.read_csv(_HISTORY_CSV)
-            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-            df = df[df['Rep'].notna()]
-        else:
-            raise FileNotFoundError("CSV not found")
-    except Exception:
-        # Fallback: Google Sheet
-        df = pd.read_csv(history_url, header=1)
-        df = df[df['Date'].astype(str).str.lower() != 'date']
-        df = df[df['Rep'].notna()]
+        df = pd.read_csv(_HISTORY_SHEET_URL)
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        df = df[df['Rep'].notna()]
+    except Exception:
+        # Fallback: local CSV (works when running locally)
+        import os as _os
+        try:
+            if _os.path.exists(_HISTORY_CSV) and _os.path.getsize(_HISTORY_CSV) > 0:
+                df = pd.read_csv(_HISTORY_CSV)
+                df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+                df = df[df['Rep'].notna()]
+            else:
+                raise FileNotFoundError
+        except Exception:
+            df = pd.read_csv(history_url, header=1)
+            df = df[df['Date'].astype(str).str.lower() != 'date']
+            df = df[df['Rep'].notna()]
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
 
     # Ensure columns expected by the dashboard always exist
     if 'Team Name' not in df.columns:
@@ -220,37 +232,35 @@ def load_history(_cache_bust_key: str):
 def load_data(_cache_bust_key: str):
     df = pd.read_csv(sheet_url, header=1)
 
-    # Enrich today's attach metrics with Redshift data (hourly CSV sync)
+    # Enrich today's attach metrics with Redshift data (hourly Google Sheet sync)
     # Replaces: Wins, Lawn Treatment, Mosquito, Bush Trimming, Flower Bed Weeding, Leaf Removal
     # Keeps from Sheet: Calls, Conversion, QA, Bonus, rep metadata (no same-day Five9)
     ATTACH_COLS = ['Wins', 'Lawn Treatment', 'Mosquito', 'Bush Trimming', 'Flower Bed Weeding', 'Leaf Removal']
     try:
-        import os
         from datetime import date as _date
-        if os.path.exists(_HISTORY_CSV) and os.path.getsize(_HISTORY_CSV) > 0:
-            hist = pd.read_csv(_HISTORY_CSV)
-            hist['Date'] = pd.to_datetime(hist['Date'], errors='coerce')
-            today_rs = hist[hist['Date'].dt.date == _date.today()].copy()
+        hist = pd.read_csv(_HISTORY_SHEET_URL)
+        hist['Date'] = pd.to_datetime(hist['Date'], errors='coerce')
+        today_rs = hist[hist['Date'].dt.date == _date.today()].copy()
 
-            if not today_rs.empty:
-                df['_rep_key'] = df['Rep'].astype(str).str.lower().str.strip()
-                today_rs['_rep_key'] = today_rs['Rep'].astype(str).str.lower().str.strip()
+        if not today_rs.empty:
+            df['_rep_key'] = df['Rep'].astype(str).str.lower().str.strip()
+            today_rs['_rep_key'] = today_rs['Rep'].astype(str).str.lower().str.strip()
 
-                # Only keep the columns we want to overwrite
-                rs_today = today_rs[['_rep_key'] + [c for c in ATTACH_COLS if c in today_rs.columns]]
+            # Only keep the columns we want to overwrite
+            rs_today = today_rs[['_rep_key'] + [c for c in ATTACH_COLS if c in today_rs.columns]]
 
-                df = df.merge(rs_today, on='_rep_key', how='left', suffixes=('', '_rs'))
+            df = df.merge(rs_today, on='_rep_key', how='left', suffixes=('', '_rs'))
 
-                # For each metric: use Redshift value if available, else keep Sheet value
-                for col in ATTACH_COLS:
-                    if f'{col}_rs' in df.columns:
-                        df[col] = df[f'{col}_rs'].combine_first(df[col])
-                        df.drop(columns=[f'{col}_rs'], inplace=True)
+            # For each metric: use Redshift value if available, else keep Sheet value
+            for col in ATTACH_COLS:
+                if f'{col}_rs' in df.columns:
+                    df[col] = df[f'{col}_rs'].combine_first(df[col])
+                    df.drop(columns=[f'{col}_rs'], inplace=True)
 
-                df.drop(columns=['_rep_key'], inplace=True)
+            df.drop(columns=['_rep_key'], inplace=True)
     except Exception as _e:
         import traceback
-        print(f"[load_data] rep_history.csv enrichment failed: {_e}\n{traceback.format_exc()}")
+        print(f"[load_data] RepHistory sheet enrichment failed: {_e}\n{traceback.format_exc()}")
 
     return df
 

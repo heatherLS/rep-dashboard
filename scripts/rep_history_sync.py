@@ -409,7 +409,7 @@ def sync(today_only: bool = False):
         final = merged
 
     # ---------------------------------------------------------------------------
-    # Write
+    # Write CSV (local backup)
     # ---------------------------------------------------------------------------
     os.makedirs(os.path.dirname(OUTPUT_CSV), exist_ok=True)
     final.to_csv(OUTPUT_CSV, index=False)
@@ -421,6 +421,36 @@ def sync(today_only: bool = False):
     print(f"Date range: {min_str} → {max_str}")
     print(f"Reps: {final['Rep'].nunique()}")
     print(f"Columns: {list(final.columns)}")
+
+    # ---------------------------------------------------------------------------
+    # Write to Google Sheet (primary — dashboard reads from here)
+    # Requires: pip install gspread gspread-dataframe
+    #   and a service account key at ~/.config/gspread/service_account.json
+    # ---------------------------------------------------------------------------
+    SPREADSHEET_ID = "1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU"
+    WORKSHEET_NAME = "RepHistory"
+    try:
+        import gspread
+        from gspread_dataframe import set_with_dataframe
+
+        gc = gspread.service_account()          # reads ~/.config/gspread/service_account.json
+        sh = gc.open_by_key(SPREADSHEET_ID)
+        try:
+            ws = sh.worksheet(WORKSHEET_NAME)
+            ws.clear()
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet(title=WORKSHEET_NAME, rows=len(final) + 200, cols=len(final.columns) + 2)
+
+        final_for_sheet = final.copy()
+        final_for_sheet['Date'] = final_for_sheet['Date'].astype(str)
+        set_with_dataframe(ws, final_for_sheet)
+        print(f"  Written {len(final):,} rows to Google Sheet tab '{WORKSHEET_NAME}'")
+    except ImportError:
+        print("  Skipping Google Sheet write (run: pip install gspread gspread-dataframe)")
+    except FileNotFoundError:
+        print("  Skipping Google Sheet write (service account key not found at ~/.config/gspread/service_account.json)")
+    except Exception as _e:
+        print(f"  Warning: Google Sheet write failed: {_e}")
 
 
 # ---------------------------------------------------------------------------
