@@ -17,7 +17,7 @@ fi
 
 # Run sync
 echo "$(date): Starting sync..." >> "$SCRIPT_DIR/sync_log.txt"
-python3 "$SCRIPT_DIR/rep_history_sync.py" --today >> "$SCRIPT_DIR/sync_log.txt" 2>&1
+"$PROJECT_DIR/venv/bin/python3" "$SCRIPT_DIR/rep_history_sync.py" --today >> "$SCRIPT_DIR/sync_log.txt" 2>&1
 
 # Commit + push if CSV changed
 # Use GIT_DIR + GIT_WORK_TREE so git never needs to call getcwd()

@@ -251,10 +251,10 @@ def load_data(_cache_bust_key: str):
 
             df = df.merge(rs_today, on='_rep_key', how='left', suffixes=('', '_rs'))
 
-            # For each metric: use Redshift value if available, else keep Sheet value
+            # Use ONLY Redshift values for attach columns (0 if no Redshift data)
             for col in ATTACH_COLS:
                 if f'{col}_rs' in df.columns:
-                    df[col] = df[f'{col}_rs'].combine_first(df[col])
+                    df[col] = df[f'{col}_rs'].fillna(0)
                     df.drop(columns=[f'{col}_rs'], inplace=True)
 
             df.drop(columns=['_rep_key'], inplace=True)
