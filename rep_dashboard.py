@@ -283,7 +283,7 @@ BONUS_SHEET_URL = (
     "/export?format=csv&gid=374383792"
 )
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(show_spinner=False, ttl=86400)
 def load_section_tiers(url: str, section_label: str):
     """
     Returns list of (threshold_percent, points) for a given section label, e.g. "Conversion".
@@ -340,9 +340,10 @@ BONUS_SHEET_URL = (
     "/export?format=csv&gid=374383792"
 )
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(show_spinner=False, ttl=86400)
 def load_section_tiers(url: str, section_label: str):
     import pandas as pd
+    SECTION_HEADERS = {"Goals","Points","Current Cycle","All-In Attach Rate","LT","Conversion","QA"}
     def pct(x):
         s = str(x).replace('%', '').strip()
         try: return float(s)
@@ -356,10 +357,17 @@ def load_section_tiers(url: str, section_label: str):
     if not rows: return []
     start = rows[0] + 1
     out = []
+    consecutive_empty = 0
     for r in range(start, len(df)):
         b = str(df.iat[r, 1]).strip()
-        if b == "" or b in ("Goals","Points","Current Cycle","All-In Attach Rate","LT","Conversion","QA"):
-            break
+        if b in SECTION_HEADERS:
+            break                           # hit next section header — stop
+        if b == "":
+            consecutive_empty += 1
+            if consecutive_empty >= 2:
+                break                       # 2+ blank rows in a row = end of section
+            continue                        # single blank row (e.g. Base row) — skip it
+        consecutive_empty = 0
         thr = pct(b)
         pts_raw = df.iat[r,3] if df.shape[1] > 3 else None
         try: pts = int(str(pts_raw).strip())
@@ -374,7 +382,7 @@ def get_point_threshold(tiers, points_value, fallback):
     if matches: return float(min(matches))
     return fallback
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(show_spinner=False, ttl=86400)
 def load_all_tiers(url: str):
     metrics = {
         "Conversion": "Conversion",
