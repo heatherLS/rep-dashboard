@@ -172,6 +172,135 @@ def date_filter_five9(start_date: date | None, end_date: date | None) -> str:
 
 
 # ---------------------------------------------------------------------------
+# RepData auto-sync from SalesRoster
+# ---------------------------------------------------------------------------
+
+def _rowcol_to_a1(row, col):
+    """Convert 1-indexed row/col to A1 notation."""
+    col_str = ''
+    c = col
+    while c > 0:
+        c, rem = divmod(c - 1, 26)
+        col_str = chr(65 + rem) + col_str
+    return f"{col_str}{row}"
+
+
+def update_repdata_from_roster(sr, sh):
+    """
+    Ensures every SalesRoster rep has a row in RepData.
+    - Looks up Team Name via TL_TeamMap (Manager_Direct → Team_Name)
+    - Backfills Birthday / Start_Date from BirthdayImport tab if present
+    Skips silently if TL_TeamMap doesn't exist yet.
+    """
+    import gspread as _gspread
+
+    # --- TL_TeamMap: Manager_Direct → Team_Name ---
+    tl_map = {}
+    try:
+        tl_ws = sh.worksheet("TL_TeamMap")
+        for row in tl_ws.get_all_records():
+            mgr = str(row.get('Manager_Direct', '')).strip()
+            team = str(row.get('Team_Name', '')).strip()
+            if mgr:
+                tl_map[mgr] = team
+        print(f"  TL_TeamMap: {len(tl_map)} entries loaded")
+    except _gspread.exceptions.WorksheetNotFound:
+        print("  TL_TeamMap tab not found — Team Name will be blank for new reps")
+
+    # --- BirthdayImport: Email → Birthday, Start_Date ---
+    birthday_map = {}
+    start_map = {}
+    try:
+        bday_ws = sh.worksheet("BirthdayImport")
+        for row in bday_ws.get_all_records():
+            email = str(row.get('Email', '')).lower().strip()
+            if email:
+                birthday_map[email] = str(row.get('Birthday', '')).strip()
+                start_map[email] = str(row.get('Start_Date', '')).strip()
+        print(f"  BirthdayImport: {len(birthday_map)} entries loaded")
+    except _gspread.exceptions.WorksheetNotFound:
+        pass  # Tab not created yet — skip birthday backfill
+
+    # --- Read RepData via gspread ---
+    rd_ws = sh.worksheet("RepData")
+    all_vals = rd_ws.get_all_values()
+
+    # RepData: row 0 = title row, row 1 = column headers, row 2+ = data
+    header_row_idx = None
+    for i, row in enumerate(all_vals):
+        if 'Rep' in row:
+            header_row_idx = i
+            break
+    if header_row_idx is None:
+        print("  Warning: RepData 'Rep' column not found — skipping RepData sync")
+        return
+
+    headers = all_vals[header_row_idx]
+    col = {h.strip(): i for i, h in enumerate(headers) if h.strip()}
+    data_rows = all_vals[header_row_idx + 1:]
+    rep_idx = col.get('Rep')
+    if rep_idx is None:
+        return
+
+    existing_emails = {
+        row[rep_idx].lower().strip()
+        for row in data_rows
+        if len(row) > rep_idx and row[rep_idx].strip()
+    }
+
+    # --- Append missing reps ---
+    missing = sr[~sr['rep_key'].isin(existing_emails)].copy()
+    if not missing.empty:
+        print(f"  RepData: adding {len(missing)} new rep(s)")
+        new_rows = []
+        for _, rep in missing.iterrows():
+            email = rep['rep_key']
+            mgr = str(rep.get('Manager_Direct', '')).strip()
+            new_row = [''] * len(headers)
+            for field, val in [
+                ('Rep',            email),
+                ('First_Name',     rep.get('First_Name', '')),
+                ('Last_Name',      rep.get('Last_Name', '')),
+                ('Manager_Direct', mgr),
+                ('Team Name',      tl_map.get(mgr, '')),
+                ('Birthday',       birthday_map.get(email, '')),
+                ('Start_Date',     start_map.get(email, '')),
+            ]:
+                if field in col:
+                    new_row[col[field]] = str(val)
+            new_rows.append(new_row)
+        rd_ws.append_rows(new_rows, value_input_option='USER_ENTERED')
+        print(f"  RepData: {len(new_rows)} rep(s) added")
+    else:
+        print("  RepData: all SalesRoster reps already present")
+
+    # --- Backfill Birthday / Start_Date for existing reps missing them ---
+    if birthday_map:
+        updates = []
+        for i, row in enumerate(data_rows):
+            if len(row) <= rep_idx:
+                continue
+            email = row[rep_idx].lower().strip()
+            if not email or email not in birthday_map:
+                continue
+            sheet_row = header_row_idx + 1 + i + 1  # 1-indexed sheet row
+            for field, val_map in [('Birthday', birthday_map), ('Start_Date', start_map)]:
+                if field not in col:
+                    continue
+                cidx = col[field]
+                current = row[cidx] if len(row) > cidx else ''
+                new_val = val_map.get(email, '')
+                if not current.strip() and new_val:
+                    updates.append({
+                        'range': _rowcol_to_a1(sheet_row, cidx + 1),
+                        'values': [[new_val]],
+                    })
+        if updates:
+            rd_ws.batch_update(updates)
+            print(f"  RepData: backfilled {len(updates)} birthday/start date(s)")
+
+
+# ---------------------------------------------------------------------------
 # Main sync
 # ---------------------------------------------------------------------------
 
@@ -244,6 +373,7 @@ def sync(today_only: bool = False):
         "1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU"
         "/export?format=csv&gid=171451260"
     )
+    sr = pd.DataFrame(columns=['rep_key', 'First_Name', 'Last_Name', 'Manager_Direct'])
     try:
         # --- SalesRoster: allowlist + names ---
         sr_raw = pd.read_csv(SALES_ROSTER_URL, header=0)
@@ -253,6 +383,7 @@ def sync(today_only: bool = False):
         sr['rep_key'] = sr['Lawnstarter_Email'].str.lower().str.strip()
         sr['First_Name'] = sr['First_Name'].astype(str).str.strip()
         sr['Last_Name'] = sr['Last_Name'].astype(str).str.strip()
+        sr['Manager_Direct'] = sr['Manager_Direct'].astype(str).str.strip() if 'Manager_Direct' in sr.columns else ''
         sales_emails = set(sr['rep_key'])
         name_map = sr[['rep_key', 'First_Name', 'Last_Name']].drop_duplicates('rep_key')
         print(f"  SalesRoster: {len(sales_emails)} sales reps (allowlist)")
@@ -445,6 +576,9 @@ def sync(today_only: bool = False):
         final_for_sheet['Date'] = final_for_sheet['Date'].astype(str)
         set_with_dataframe(ws, final_for_sheet)
         print(f"  Written {len(final):,} rows to Google Sheet tab '{WORKSHEET_NAME}'")
+
+        # Sync new SalesRoster reps into RepData
+        update_repdata_from_roster(sr, sh)
     except ImportError:
         print("  Skipping Google Sheet write (run: pip install gspread gspread-dataframe)")
     except FileNotFoundError:
