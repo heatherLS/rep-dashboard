@@ -185,9 +185,17 @@ def _rowcol_to_a1(row, col):
     return f"{col_str}{row}"
 
 
+def _replace_row_ref(formula, old_row, new_row):
+    """Replace bare cell row references in a formula, e.g. E3 → E5, but not $E$1."""
+    import re
+    return re.sub(rf'([A-Z]{{1,2}}){old_row}\b', rf'\g<1>{new_row}', str(formula))
+
+
 def update_repdata_from_roster(sr, sh):
     """
     Ensures every SalesRoster rep has a row in RepData.
+    - Copies formula template from last data row (cols A-B and K-AE) for new reps
+    - Writes static values into cols C-J (name, email, role, manager, team, birthday)
     - Looks up Team Name via TL_TeamMap (Manager_Direct → Team_Name)
     - Backfills Birthday / Start_Date from BirthdayImport tab if present
     Skips silently if TL_TeamMap doesn't exist yet.
@@ -250,29 +258,56 @@ def update_repdata_from_roster(sr, sh):
 
     # --- Append missing reps ---
     missing = sr[~sr['rep_key'].isin(existing_emails)].copy()
-    if not missing.empty:
+    if missing.empty:
+        print("  RepData: all SalesRoster reps already present")
+    else:
         print(f"  RepData: adding {len(missing)} new rep(s)")
+
+        # Read formula template from last data row (so K-AE formulas carry over)
+        last_data_sheet_row = len(all_vals)  # 1-indexed (all_vals includes title+header)
+        template_formulas = rd_ws.get(
+            f'A{last_data_sheet_row}:AE{last_data_sheet_row}',
+            value_render_option='FORMULA'
+        )
+        template = template_formulas[0] if template_formulas else []
+        # Pad template to full header width
+        while len(template) < len(headers):
+            template.append('')
+
+        # Columns with static values (written per-rep); all others get formula from template
+        STATIC_COLS = {'First_Name', 'Last_Name', 'Rep', 'Start Date', 'Current_Role',
+                       'Manager_Direct', 'Team Name', 'Birthday'}
+
         new_rows = []
-        for _, rep in missing.iterrows():
+        for i, (_, rep) in enumerate(missing.iterrows()):
             email = rep['rep_key']
             mgr = str(rep.get('Manager_Direct', '')).strip()
-            new_row = [''] * len(headers)
-            for field, val in [
-                ('Rep',            email),
-                ('First_Name',     rep.get('First_Name', '')),
-                ('Last_Name',      rep.get('Last_Name', '')),
-                ('Manager_Direct', mgr),
-                ('Team Name',      tl_map.get(mgr, '')),
-                ('Birthday',       birthday_map.get(email, '')),
-                ('Start_Date',     start_map.get(email, '')),
-            ]:
+            new_sheet_row = last_data_sheet_row + 1 + i
+
+            # Start from template formulas, adjusting row references
+            new_row = [
+                _replace_row_ref(cell, last_data_sheet_row, new_sheet_row)
+                for cell in template
+            ]
+
+            # Overwrite static columns
+            static_vals = {
+                'Rep':            email,
+                'First_Name':     str(rep.get('First_Name', '')),
+                'Last_Name':      str(rep.get('Last_Name', '')),
+                'Manager_Direct': mgr,
+                'Team Name':      tl_map.get(mgr, ''),
+                'Birthday':       birthday_map.get(email, ''),
+                'Start Date':     start_map.get(email, ''),
+            }
+            for field, val in static_vals.items():
                 if field in col:
-                    new_row[col[field]] = str(val)
+                    new_row[col[field]] = val
+
             new_rows.append(new_row)
+
         rd_ws.append_rows(new_rows, value_input_option='USER_ENTERED')
-        print(f"  RepData: {len(new_rows)} rep(s) added")
-    else:
-        print("  RepData: all SalesRoster reps already present")
+        print(f"  RepData: {len(new_rows)} rep(s) added with formulas")
 
     # --- Backfill Birthday / Start_Date for existing reps missing them ---
     if birthday_map:
@@ -284,7 +319,7 @@ def update_repdata_from_roster(sr, sh):
             if not email or email not in birthday_map:
                 continue
             sheet_row = header_row_idx + 1 + i + 1  # 1-indexed sheet row
-            for field, val_map in [('Birthday', birthday_map), ('Start_Date', start_map)]:
+            for field, val_map in [('Birthday', birthday_map), ('Start Date', start_map)]:
                 if field not in col:
                     continue
                 cidx = col[field]
