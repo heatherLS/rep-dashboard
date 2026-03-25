@@ -1659,11 +1659,12 @@ if page == "🧮 Calculator":
                 st.success("🏆 All-In Attach: top tier reached!")
 
         with _n3:
-            nt = _next_tier(cycle_qa, _qa_tiers)
-            if nt:
-                st.info(f"**QA → {nt[0]:.0f}%**\n\nCurrent: {cycle_qa:.1f}% — needs improvement.")
+            _qa_base = min((t for t, _ in _qa_tiers), default=86.0)
+            if cycle_qa >= _qa_base:
+                st.success(f"**QA: Base met!**\n\nCurrent: {cycle_qa:.1f}% — above the {_qa_base:.0f}% base. Keep it up!")
             else:
-                st.success("🏆 QA: top tier reached!")
+                _qa_gap = _qa_base - cycle_qa
+                st.info(f"**QA → {_qa_base:.0f}% base**\n\nCurrent: {cycle_qa:.1f}% — {_qa_gap:.1f}% away from base.")
 
     st.markdown("---")
     st.header("🌿 Attach Rate Calculator")
