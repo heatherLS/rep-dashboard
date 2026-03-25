@@ -1525,6 +1525,147 @@ if page == "📊 Leaderboard":
 # 🧮 TAB 2: Calculator
 # --------------------------------------------
 if page == "🧮 Calculator":
+
+    # ── Personalized Bonus Calculator ──────────────────────────────────────
+    _CC_URL = (
+        "https://docs.google.com/spreadsheets/d/"
+        "1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU"
+        "/export?format=csv&gid=1572505417"
+    )
+
+    @st.cache_data(show_spinner=False, ttl=300)
+    def load_current_cycle(url: str) -> pd.DataFrame:
+        cc = pd.read_csv(url, header=0)
+        cc.columns = cc.columns.str.strip()
+        return cc
+
+    def _pct_val(v):
+        try: return float(str(v).replace('%', '').strip())
+        except: return 0.0
+
+    def _int_val(v):
+        try: return int(float(str(v).replace('%', '').strip()))
+        except: return 0
+
+    def _next_tier(current_pct, tiers):
+        """Return (next_threshold, points) or None if already at top."""
+        above = sorted([(t, p) for t, p in tiers if t > current_pct], key=lambda x: x[0])
+        return above[0] if above else None
+
+    st.markdown("## 🎯 Your Personalized Bonus Calculator")
+
+    _cc_df = load_current_cycle(_CC_URL)
+
+    # Look up the viewed rep by Name_Proper
+    _vname = ""
+    if not viewed_row.empty:
+        _fn = _safe(viewed_row['First_Name'].values[0])
+        _ln = _safe(viewed_row['Last_Name'].values[0])
+        _vname = f"{_fn} {_ln}".strip()
+
+    _cc_match = _cc_df[_cc_df['Agent'].str.strip().str.lower() == _vname.lower()] if _vname else pd.DataFrame()
+
+    if _cc_match.empty:
+        st.info(f"No current cycle data found for {viewed_first} yet — check back after the next cycle update.")
+    else:
+        _cc = _cc_match.iloc[0]
+
+        cycle_calls  = _int_val(_cc.get('Call #', 0))
+        cycle_wins   = _int_val(_cc.get('Win #', 0))
+        cycle_attach = _int_val(_cc.get('Attach #', 0))
+        cycle_conv   = _pct_val(_cc.get('Conversion', 0))
+        cycle_att    = _pct_val(_cc.get('Attach', 0))
+        cycle_lt     = _pct_val(_cc.get('LT', 0))
+        cycle_qa     = _pct_val(_cc.get('QA', 0))
+        cycle_tier   = str(_cc.get('Bonus Tier', '—')).strip()
+        cycle_pts    = str(_cc.get('Total Points', '0')).strip()
+
+        # Load live cycle tiers
+        _conv_tiers   = load_section_tiers(BONUS_SHEET_URL, "Conversion")
+        _attach_tiers = load_section_tiers(BONUS_SHEET_URL, "All-In Attach Rate")
+        _qa_tiers     = load_section_tiers(BONUS_SHEET_URL, "QA")
+
+        # ── Current standing ───────────────────────────────────────────────
+        st.caption(f"Cycle data for **{_vname}** — updates every 5 min from CurrentCycle tab.")
+        st.markdown(f"**Current Tier:** {cycle_tier} &nbsp;|&nbsp; **Total Points:** {cycle_pts}")
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        _c1, _c2, _c3, _c4 = st.columns(4)
+        def _tier_label(pct, tiers):
+            met = [t for t, _ in tiers if pct >= t]
+            return f"✅ {max(met):.0f}% met" if met else "❌ base not met"
+
+        with _c1:
+            st.metric("Calls", cycle_calls)
+            st.metric("Wins", cycle_wins)
+        with _c2:
+            st.metric("Conversion", f"{cycle_conv:.1f}%")
+            st.caption(_tier_label(cycle_conv, _conv_tiers))
+        with _c3:
+            st.metric("All-In Attach", f"{cycle_att:.1f}%")
+            st.caption(_tier_label(cycle_att, _attach_tiers))
+        with _c4:
+            st.metric("QA", f"{cycle_qa:.1f}%")
+            st.caption(_tier_label(cycle_qa, _qa_tiers))
+
+        # ── What-If Projector ──────────────────────────────────────────────
+        st.markdown("### 🔮 What-If Projector")
+        st.caption("Slide to see how additional activity would move your metrics and tier.")
+
+        _wc1, _wc2, _wc3 = st.columns(3)
+        with _wc1:
+            extra_wins    = st.slider("Additional Wins",     0, 60, 0, key="calc_xwins")
+        with _wc2:
+            extra_calls   = st.slider("Additional Calls",    0, 300, 0, key="calc_xcalls")
+        with _wc3:
+            extra_attaches = st.slider("Additional Attaches", 0, 60, 0, key="calc_xattach")
+
+        proj_calls  = cycle_calls  + extra_calls
+        proj_wins   = cycle_wins   + extra_wins
+        proj_attach = cycle_attach + extra_attaches
+        proj_conv   = (proj_wins / proj_calls * 100)   if proj_calls > 0 else 0.0
+        proj_att    = (proj_attach / proj_wins * 100)  if proj_wins  > 0 else 0.0
+
+        _pc1, _pc2, _pc3 = st.columns(3)
+        with _pc1:
+            st.metric("Projected Conversion",   f"{proj_conv:.1f}%",
+                      delta=f"{proj_conv - cycle_conv:+.1f}%")
+        with _pc2:
+            st.metric("Projected All-In Attach", f"{proj_att:.1f}%",
+                      delta=f"{proj_att - cycle_att:+.1f}%")
+        with _pc3:
+            st.metric("Projected Calls / Wins",  f"{proj_calls} / {proj_wins}")
+
+        # ── "What you need" callouts ───────────────────────────────────────
+        st.markdown("#### 🏁 To reach your next tier:")
+        _n1, _n2, _n3 = st.columns(3)
+
+        with _n1:
+            nt = _next_tier(proj_conv, _conv_tiers)
+            if nt:
+                needed_wins = math.ceil(nt[0] / 100 * proj_calls) - proj_wins
+                st.info(f"**Conversion → {nt[0]:.0f}%**\n\n"
+                        f"Need **{max(0, needed_wins)} more win(s)** at your projected call count.")
+            else:
+                st.success("🏆 Conversion: top tier reached!")
+
+        with _n2:
+            nt = _next_tier(proj_att, _attach_tiers)
+            if nt:
+                needed_att = math.ceil(nt[0] / 100 * proj_wins) - proj_attach
+                st.info(f"**All-In Attach → {nt[0]:.0f}%**\n\n"
+                        f"Need **{max(0, needed_att)} more attach(es)** at your projected win count.")
+            else:
+                st.success("🏆 All-In Attach: top tier reached!")
+
+        with _n3:
+            nt = _next_tier(cycle_qa, _qa_tiers)
+            if nt:
+                st.info(f"**QA → {nt[0]:.0f}%**\n\nCurrent: {cycle_qa:.1f}% — needs improvement.")
+            else:
+                st.success("🏆 QA: top tier reached!")
+
+    st.markdown("---")
     st.header("🌿 Attach Rate Calculator")
 
     default_targets = {
