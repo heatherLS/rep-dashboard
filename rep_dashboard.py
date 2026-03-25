@@ -1782,10 +1782,17 @@ if page == "💰Bonus & History":
         base_attach_val = _get_base(attach_tiers, 25.0)
         base_qa_val     = _get_base(qa_tiers, 80.0)
 
+        def _safe_metric(v):
+            try:
+                f = float(v)
+                return 0.0 if (f != f) else f  # f != f is True only for NaN
+            except (TypeError, ValueError):
+                return 0.0
+
         qualifiers = {
-            'Conversion':    (metrics['Conversion'],    base_conv_val,   f"{base_conv_val:.0f}%"),
-            'All-In Attach': (metrics['All-In Attach'], base_attach_val, f"{base_attach_val:.0f}%"),
-            'QA':            (metrics['QA'],            base_qa_val,     f"{base_qa_val:.0f}%"),
+            'Conversion':    (_safe_metric(metrics['Conversion']),    base_conv_val,   f"{base_conv_val:.0f}%"),
+            'All-In Attach': (_safe_metric(metrics['All-In Attach']), base_attach_val, f"{base_attach_val:.0f}%"),
+            'QA':            (_safe_metric(metrics['QA']),            base_qa_val,     f"{base_qa_val:.0f}%"),
         }
 
         met_list     = [k for k, (val, base, _) in qualifiers.items() if val >= base]
