@@ -263,8 +263,19 @@ def update_repdata_from_roster(sr, sh):
     else:
         print(f"  RepData: adding {len(missing)} new rep(s)")
 
-        # Read formula template from last data row (so K-AE formulas carry over)
-        last_data_sheet_row = len(all_vals)  # 1-indexed (all_vals includes title+header)
+        # Read formula template from the last row that actually has formulas in col K
+        # (guards against rows added manually without formulas being used as template)
+        all_formulas_col_k = rd_ws.get('K3:K', value_render_option='FORMULA')
+        template_row_offset = None
+        for fi in range(len(all_formulas_col_k) - 1, -1, -1):
+            cell = all_formulas_col_k[fi][0] if all_formulas_col_k[fi] else ''
+            if str(cell).startswith('='):
+                template_row_offset = fi
+                break
+        if template_row_offset is None:
+            print("  Warning: no formula template row found in RepData — skipping new rep add")
+            return
+        last_data_sheet_row = header_row_idx + 1 + template_row_offset + 1  # 1-indexed sheet row
         template_formulas = rd_ws.get(
             f'A{last_data_sheet_row}:AE{last_data_sheet_row}',
             value_render_option='FORMULA'
