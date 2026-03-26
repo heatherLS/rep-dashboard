@@ -179,18 +179,36 @@ def _compute_stats(df: pd.DataFrame, min_calls_team: int = MIN_CALLS_TEAM):
         for _, row in rep_df.head(3).iterrows()
     ]
 
-    # ---- Reps: Attach ----
+    # ---- Reps: Attach — ranked by total attach count ----
     attach_df = df[df['Wins'] >= MIN_WINS_ATTACH].copy()
     svc_cols = [c for c in ATTACH_SERVICES if c in attach_df.columns]
     attach_df['Attach_Count'] = attach_df[svc_cols].sum(axis=1)
-    attach_df['Attach_Rate'] = (attach_df['Attach_Count'] / attach_df['Wins'].replace(0, pd.NA)) * 100
-    attach_df['Attach_Rate'] = attach_df['Attach_Rate'].fillna(0)
-    attach_df = attach_df.sort_values(['Attach_Count', 'Attach_Rate'], ascending=[False, False])
-    top_attach = [
-        (row['Full_Name'], float(row['Attach_Rate']), int(row['Attach_Count']), int(row['Wins']),
-         str(row.get('Team Name', '')))
-        for _, row in attach_df.head(3).iterrows()
-    ]
+    attach_df = attach_df[attach_df['Attach_Count'] > 0]
+    attach_df = attach_df.sort_values(['Attach_Count', 'Wins'], ascending=[False, False])
+
+    # Short service name map for display
+    SVC_SHORT = {
+        'Lawn Treatment':       ('LT',  ':seedling:'),
+        'Mosquito':             ('Mosq',':mosquito:'),
+        'Bush Trimming':        ('Bush', ':deciduous_tree:'),
+        'Flower Bed Weeding':   ('Flwr', ':cherry_blossom:'),
+        'Leaf Removal':         ('Leaf', ':fallen_leaf:'),
+    }
+
+    top_attach = []
+    for _, row in attach_df.head(3).iterrows():
+        breakdown = []
+        for svc in ATTACH_SERVICES:
+            if svc in row and int(row[svc]) > 0:
+                emoji = SVC_SHORT.get(svc, ('', ''))[1]
+                breakdown.append(f"{emoji} {int(row[svc])} {SVC_SHORT.get(svc, (svc,))[0]}")
+        top_attach.append((
+            row['Full_Name'],
+            int(row['Attach_Count']),
+            int(row['Wins']),
+            str(row.get('Team Name', '')),
+            breakdown,
+        ))
 
     return top_teams, top_conv, top_attach
 
@@ -234,9 +252,10 @@ def _format_reps_conv(top_conv):
 def _format_reps_attach(top_attach):
     medals = ["🥇", "🥈", "🥉"]
     lines = []
-    for i, (name, rate, count, wins, team) in enumerate(top_attach):
+    for i, (name, count, wins, team, breakdown) in enumerate(top_attach):
         medal = medals[i] if i < len(medals) else f"{i+1}."
-        lines.append(f"  {medal} *{name}* ({team}) — {rate:.1f}% attach ({count} attaches / {wins} wins)")
+        svc_str = "  ".join(breakdown) if breakdown else "—"
+        lines.append(f"  {medal} *{name}* ({team}) — *{count} attaches* on {wins} win{'s' if wins != 1 else ''}\n      {svc_str}")
     return "\n".join(lines) if lines else "  _No data yet_"
 
 
@@ -278,8 +297,9 @@ def run_today():
 
     top_teams, top_conv, top_attach = _compute_stats(df, min_calls_team=5)
 
-    now_cst = datetime.utcnow() - timedelta(hours=6)
-    time_str = now_cst.strftime("%-I:%M %p CST")
+    import pytz
+    now_central = datetime.now(pytz.timezone('America/Chicago'))
+    time_str = now_central.strftime("%-I:%M %p %Z")
     date_str = date.today().strftime("%A, %B %-d")
     msg = (
         f"<!channel> :zap: *Live Standings — {date_str} ({time_str})* :zap:\n\n"
