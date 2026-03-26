@@ -510,16 +510,22 @@ def get_last_week_champions(history_df, min_calls_team=50, min_calls_rep=10):
     df = clean_numeric(df, ['Calls','Wins','Lawn Treatment','Bush Trimming','Mosquito','Flower Bed Weeding','Leaf Removal'])
 
     # ======================
-    # Teams (no min filter)
+    # Teams
     # ======================
-    team_totals = df.groupby('Team Name', dropna=False).agg(
+    df_teams = df[
+        df['Team Name'].notna() &
+        (df['Team Name'].astype(str).str.strip() != '') &
+        (df['Team Name'].astype(str).str.strip().str.lower() != 'unknown')
+    ].copy()
+
+    team_totals = df_teams.groupby('Team Name').agg(
         Calls=('Calls','sum'),
         Wins=('Wins','sum')
     ).reset_index()
 
     top_team = None
     if not team_totals.empty:
-        # Safe conversion; 0 calls -> 0% instead of NaN/inf
+        team_totals = team_totals[team_totals['Calls'] >= min_calls_team]
         denom = team_totals['Calls'].replace(0, pd.NA)
         team_totals['Conversion'] = (team_totals['Wins'] / denom) * 100
         team_totals['Conversion'] = team_totals['Conversion'].fillna(0.0)
