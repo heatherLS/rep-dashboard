@@ -1255,8 +1255,8 @@ if page == "📊 Leaderboard":
 
     team_totals['Conversion'] = (team_totals['Total_Wins'] / team_totals['Total_Calls']) * 100
 
-    # Require a minimum number of calls so a team with 1 win / 3 calls doesn't top the board
-    MIN_TEAM_CALLS = 10
+    # Require a minimum number of calls so a team with 1 win / 1 call doesn't top the board
+    MIN_TEAM_CALLS = 5
     team_totals = team_totals[team_totals['Total_Calls'] >= MIN_TEAM_CALLS].copy()
 
     team_totals['Rank'] = team_totals['Conversion'].rank(ascending=False, method='min').astype(int)
