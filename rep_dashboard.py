@@ -2166,31 +2166,31 @@ if page == "📅 Yesterday":
 
 
 
-    # ✅ Enrich yesterday_df with calls from Five9 Google Sheet (always up to date)
+    # ✅ Enrich yesterday_df with calls + wins from Five9 Google Sheet (source of truth for conversion)
     FIVE9_URL = "https://docs.google.com/spreadsheets/d/1sO4ZDe-n8-ugc-OsoDisHPXXEAap6b2iINcjsWXz5gU/export?format=csv&gid=396976453"
     try:
         _raw = pd.read_csv(FIVE9_URL, header=None)
-        # Row 1 = column headers; first occurrence of 'All in Calls' = YESTERDAY section (col 9)
-        _five9 = _raw.iloc[1:].copy()
-        _five9.columns = _raw.iloc[1].tolist()
-        _five9 = _five9[_five9['Agent'].notna() & (_five9['Agent'].astype(str).str.strip() != '') & (_five9['Agent'] != 'Agent')].copy()
-        # Use positional column 9 (All in Calls - YESTERDAY) and 15 (Total Wins - YESTERDAY)
-        _five9_calls = _raw.iloc[2:, [1, 9]].copy()  # col 1=Email, col 9=All in Calls (YESTERDAY)
-        _five9_calls.columns = ['_rep_key', 'five9_calls']
-        _five9_calls['_rep_key'] = _five9_calls['_rep_key'].astype(str).str.lower().str.strip()
-        _five9_calls['five9_calls'] = pd.to_numeric(_five9_calls['five9_calls'], errors='coerce').fillna(0)
-        _five9_calls = _five9_calls[_five9_calls['_rep_key'].str.contains('@lawnstarter.com', na=False)]
+        # Col 1=Email, Col 9=All in Calls (YESTERDAY), Col 15=Total Wins (YESTERDAY)
+        _five9_cv = _raw.iloc[2:, [1, 9, 15]].copy()
+        _five9_cv.columns = ['_rep_key', 'five9_calls', 'five9_wins']
+        _five9_cv['_rep_key']    = _five9_cv['_rep_key'].astype(str).str.lower().str.strip()
+        _five9_cv['five9_calls'] = pd.to_numeric(_five9_cv['five9_calls'], errors='coerce').fillna(0)
+        _five9_cv['five9_wins']  = pd.to_numeric(_five9_cv['five9_wins'],  errors='coerce').fillna(0)
+        _five9_cv = _five9_cv[_five9_cv['_rep_key'].str.contains('@lawnstarter.com', na=False)]
 
         yesterday_df = yesterday_df.copy()
         yesterday_df['_rep_key'] = yesterday_df['Rep'].astype(str).str.lower().str.strip()
-        yesterday_df = yesterday_df.merge(_five9_calls, on='_rep_key', how='left')
-        # Overwrite Calls with Five9 value where available
+        yesterday_df = yesterday_df.merge(_five9_cv, on='_rep_key', how='left')
+        # Overwrite Calls + Wins with Five9 values where available (source of truth for conversion %)
         yesterday_df['Calls'] = yesterday_df['five9_calls'].combine_first(
             pd.to_numeric(yesterday_df['Calls'], errors='coerce').fillna(0)
         )
-        yesterday_df.drop(columns=['_rep_key', 'five9_calls'], inplace=True)
+        yesterday_df['Wins'] = yesterday_df['five9_wins'].combine_first(
+            pd.to_numeric(yesterday_df['Wins'], errors='coerce').fillna(0)
+        )
+        yesterday_df.drop(columns=['_rep_key', 'five9_calls', 'five9_wins'], inplace=True)
     except Exception:
-        pass  # silently fall back to CSV calls if sheet unavailable
+        pass  # silently fall back to RepHistory calls/wins if sheet unavailable
 
     # ✅ Get selected rep from session state (always set from auth now)
     selected_rep = st.session_state.get("selected_rep", viewed_email)
