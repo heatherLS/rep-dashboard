@@ -50,6 +50,13 @@ HISTORY_URL = (
     "/export?format=csv&gid=1441799869"
 )
 
+# RepData sheet — live today data (calls from TodayONLYConversion, attach from Redshift sync)
+REPDATA_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU"
+    "/export?format=csv&gid=171451260"
+)
+
 # Five9 Google Sheet — Yesterday tab (col 1=Email, col 9=All in Calls YESTERDAY)
 FIVE9_URL = (
     "https://docs.google.com/spreadsheets/d/"
@@ -67,6 +74,24 @@ MIN_WINS_ATTACH = 1   # min wins for a rep to qualify in attach rankings
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def _load_today() -> pd.DataFrame:
+    """Load live today data from RepData sheet (same source as the dashboard leaderboard)."""
+    df = pd.read_csv(REPDATA_URL, header=1)
+    df = df[df['Rep'].notna() & (df['Rep'].astype(str).str.strip() != '')].copy()
+    # Rename to match expected column names
+    col_map = {'Name_Proper': 'Full_Name'}
+    df = df.rename(columns=col_map)
+    # Split Full_Name into First/Last if needed
+    if 'First_Name' not in df.columns and 'Full_Name' in df.columns:
+        parts = df['Full_Name'].astype(str).str.strip().str.split(' ', n=1, expand=True)
+        df['First_Name'] = parts[0]
+        df['Last_Name']  = parts[1] if parts.shape[1] > 1 else ''
+    for col in ['Calls', 'Wins'] + ATTACH_SERVICES:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    return df
+
+
 def _load_history() -> pd.DataFrame:
     df = pd.read_csv(HISTORY_URL)
     df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
@@ -111,7 +136,7 @@ def _full_name(row) -> str:
     return name if name else str(row.get('Rep', 'Unknown')).split('@')[0].title()
 
 
-def _compute_stats(df: pd.DataFrame):
+def _compute_stats(df: pd.DataFrame, min_calls_team: int = MIN_CALLS_TEAM):
     """
     Returns:
       top_teams: list of (team_name, conversion_pct, wins, calls) — top 3
@@ -133,7 +158,7 @@ def _compute_stats(df: pd.DataFrame):
     team_totals = team_df.groupby('Team Name').agg(
         Calls=('Calls', 'sum'), Wins=('Wins', 'sum')
     ).reset_index()
-    team_totals = team_totals[team_totals['Calls'] >= MIN_CALLS_TEAM]
+    team_totals = team_totals[team_totals['Calls'] >= min_calls_team]
     if not team_totals.empty:
         team_totals['Conversion'] = (team_totals['Wins'] / team_totals['Calls'].replace(0, pd.NA)) * 100
         team_totals['Conversion'] = team_totals['Conversion'].fillna(0)
@@ -245,19 +270,17 @@ def run_yesterday():
 
 def run_today():
     print(f"[slack_notify] Posting today's live stats...")
-    history_df = _load_history()
-    today = date.today()
-    df = history_df[history_df['Date'].dt.date == today].copy()
+    df = _load_today()
 
-    if df.empty:
-        print(f"[slack_notify] No history data for {today} yet, skipping.")
+    if df[df['Wins'] > 0].empty:
+        print(f"[slack_notify] No sales data for today yet, skipping.")
         return
 
-    top_teams, top_conv, top_attach = _compute_stats(df)
+    top_teams, top_conv, top_attach = _compute_stats(df, min_calls_team=5)
 
     now_cst = datetime.utcnow() - timedelta(hours=6)
     time_str = now_cst.strftime("%-I:%M %p CST")
-    date_str = today.strftime("%A, %B %-d")
+    date_str = date.today().strftime("%A, %B %-d")
     msg = (
         f"<!channel> :zap: *Live Standings — {date_str} ({time_str})* :zap:\n\n"
         f":trophy: *Top 3 Teams by Conversion*\n{_format_teams(top_teams)}\n\n"
