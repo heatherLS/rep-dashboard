@@ -29,6 +29,18 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+# Load .env file if SLACK_WEBHOOK_URL not already in environment
+def _load_env():
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip())
+
+_load_env()
 SLACK_WEBHOOK = os.environ.get("SLACK_WEBHOOK_URL", "")
 
 # RepHistory Google Sheet (written by hourly cron sync from Redshift)
