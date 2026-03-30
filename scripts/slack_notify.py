@@ -64,7 +64,7 @@ FIVE9_URL = (
     "/export?format=csv&gid=396976453"
 )
 
-ATTACH_SERVICES = ['Lawn Treatment', 'Mosquito', 'Bush Trimming', 'Flower Bed Weeding', 'Leaf Removal']
+ATTACH_SERVICES = ['Lawn Treatment', 'Mosquito', 'Bush Trimming', 'Flower Bed Weeding', 'Leaf Removal', 'Pool']
 
 MIN_CALLS_REP  = 5    # min calls for a rep to qualify in conversion rankings
 MIN_CALLS_TEAM = 20   # min calls for a team to qualify
@@ -115,14 +115,13 @@ def _enrich_with_five9_calls(df: pd.DataFrame) -> pd.DataFrame:
         five9_cv = five9_cv[five9_cv['_rep_key'].str.contains('@lawnstarter.com', na=False)]
 
         df = df.copy()
+        df['repdata_wins'] = pd.to_numeric(df['Wins'], errors='coerce').fillna(0)
         df['_rep_key'] = df['Rep'].astype(str).str.lower().str.strip()
         df = df.merge(five9_cv, on='_rep_key', how='left')
         df['Calls'] = df['five9_calls'].combine_first(
             pd.to_numeric(df['Calls'], errors='coerce').fillna(0)
         )
-        df['Wins'] = df['five9_wins'].combine_first(
-            pd.to_numeric(df['Wins'], errors='coerce').fillna(0)
-        )
+        df['Wins'] = df['five9_wins'].combine_first(df['repdata_wins'])
         df.drop(columns=['_rep_key', 'five9_calls', 'five9_wins'], inplace=True)
     except Exception as e:
         print(f"[slack_notify] Five9 enrich failed: {e}", file=sys.stderr)
@@ -180,7 +179,9 @@ def _compute_stats(df: pd.DataFrame, min_calls_team: int = MIN_CALLS_TEAM):
     ]
 
     # ---- Reps: Attach — ranked by total attach count ----
-    attach_df = df[df['Wins'] >= MIN_WINS_ATTACH].copy()
+    # Use repdata_wins (pre-Five9) if available so timing gaps don't filter out reps with attaches
+    wins_col = 'repdata_wins' if 'repdata_wins' in df.columns else 'Wins'
+    attach_df = df[df[wins_col] >= MIN_WINS_ATTACH].copy()
     svc_cols = [c for c in ATTACH_SERVICES if c in attach_df.columns]
     attach_df['Attach_Count'] = attach_df[svc_cols].sum(axis=1)
     attach_df = attach_df[attach_df['Attach_Count'] > 0]
@@ -193,6 +194,7 @@ def _compute_stats(df: pd.DataFrame, min_calls_team: int = MIN_CALLS_TEAM):
         'Bush Trimming':        ('Bush', ':deciduous_tree:'),
         'Flower Bed Weeding':   ('Flwr', ':cherry_blossom:'),
         'Leaf Removal':         ('Leaf', ':fallen_leaf:'),
+        'Pool':                 ('Pool', ':swimming_man:'),
     }
 
     top_attach = []
