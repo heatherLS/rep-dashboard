@@ -75,17 +75,14 @@ MIN_WINS_ATTACH = 1   # min wins for a rep to qualify in attach rankings
 # Helpers
 # ---------------------------------------------------------------------------
 def _load_today() -> pd.DataFrame:
-    """Load live today data from RepData sheet (same source as the dashboard leaderboard)."""
-    df = pd.read_csv(REPDATA_URL, header=1)
+    """Load live today data from local rep_history.csv (written by Redshift sync every 30 min)."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    csv_path = os.path.join(script_dir, '..', 'data', 'rep_history.csv')
+    df = pd.read_csv(csv_path)
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    today = date.today()
+    df = df[df['Date'].dt.date == today].copy()
     df = df[df['Rep'].notna() & (df['Rep'].astype(str).str.strip() != '')].copy()
-    # Rename to match expected column names
-    col_map = {'Name_Proper': 'Full_Name'}
-    df = df.rename(columns=col_map)
-    # Split Full_Name into First/Last if needed
-    if 'First_Name' not in df.columns and 'Full_Name' in df.columns:
-        parts = df['Full_Name'].astype(str).str.strip().str.split(' ', n=1, expand=True)
-        df['First_Name'] = parts[0]
-        df['Last_Name']  = parts[1] if parts.shape[1] > 1 else ''
     for col in ['Calls', 'Wins'] + ATTACH_SERVICES:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
