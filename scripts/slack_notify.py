@@ -75,17 +75,49 @@ MIN_WINS_ATTACH = 1   # min wins for a rep to qualify in attach rankings
 # Helpers
 # ---------------------------------------------------------------------------
 def _load_today() -> pd.DataFrame:
-    """Load live today data from local rep_history.csv (written by Redshift sync every 30 min)."""
+    """
+    Load live today data by merging two sources:
+      - REPDATA_URL (Google Sheet): Calls + Wins via live formulas (source of truth for conversion)
+      - rep_history.csv (Redshift sync): attach columns (source of truth for attaches)
+    """
+    # --- Calls + Wins from Google Sheet (live today formulas) ---
+    conv_df = pd.read_csv(REPDATA_URL, header=1)
+    conv_df = conv_df[conv_df['Rep'].notna() & (conv_df['Rep'].astype(str).str.strip() != '')].copy()
+    col_map = {'Name_Proper': 'Full_Name'}
+    conv_df = conv_df.rename(columns=col_map)
+    if 'First_Name' not in conv_df.columns and 'Full_Name' in conv_df.columns:
+        parts = conv_df['Full_Name'].astype(str).str.strip().str.split(' ', n=1, expand=True)
+        conv_df['First_Name'] = parts[0]
+        conv_df['Last_Name']  = parts[1] if parts.shape[1] > 1 else ''
+    for col in ['Calls', 'Wins']:
+        if col in conv_df.columns:
+            conv_df[col] = pd.to_numeric(conv_df[col], errors='coerce').fillna(0)
+    conv_df['_rep_key'] = conv_df['Rep'].astype(str).str.lower().str.strip()
+
+    # --- Attaches from rep_history.csv (Redshift, refreshed every 30 min) ---
     script_dir = os.path.dirname(os.path.abspath(__file__))
     csv_path = os.path.join(script_dir, '..', 'data', 'rep_history.csv')
-    df = pd.read_csv(csv_path)
-    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-    today = date.today()
-    df = df[df['Date'].dt.date == today].copy()
-    df = df[df['Rep'].notna() & (df['Rep'].astype(str).str.strip() != '')].copy()
-    for col in ['Calls', 'Wins'] + ATTACH_SERVICES:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    attach_df = pd.read_csv(csv_path)
+    attach_df['Date'] = pd.to_datetime(attach_df['Date'], errors='coerce')
+    attach_df = attach_df[attach_df['Date'].dt.date == date.today()].copy()
+    attach_df = attach_df[attach_df['Rep'].notna() & (attach_df['Rep'].astype(str).str.strip() != '')].copy()
+    for col in ATTACH_SERVICES:
+        if col in attach_df.columns:
+            attach_df[col] = pd.to_numeric(attach_df[col], errors='coerce').fillna(0)
+    attach_df['_rep_key'] = attach_df['Rep'].astype(str).str.lower().str.strip()
+    attach_cols = [c for c in ATTACH_SERVICES if c in attach_df.columns]
+    attach_slim = attach_df[['_rep_key'] + attach_cols]
+
+    # --- Merge: conv_df is the base, attach data joined in ---
+    df = conv_df.merge(attach_slim, on='_rep_key', how='left', suffixes=('', '_rs'))
+    for col in attach_cols:
+        rs_col = col + '_rs'
+        if rs_col in df.columns:
+            df[col] = df[rs_col].combine_first(df.get(col, pd.Series(0, index=df.index)))
+            df.drop(columns=[rs_col], inplace=True)
+        elif col not in df.columns:
+            df[col] = 0
+    df.drop(columns=['_rep_key'], inplace=True)
     return df
 
 
