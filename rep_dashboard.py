@@ -2491,8 +2491,9 @@ if page == "👩‍💻 Team Lead Dashboard":
             _tl_default = manager_directs.index(_tl_name_fmt)
     selected_lead = st.selectbox("Select Your Name (Team Lead):", manager_directs, index=_tl_default)
 
-    # Filter reps under selected team lead + always show Team ABC (new hires in training)
-    _in_training = df['Team Name'].astype(str).str.strip().str.lower() == 'team abc'
+    # Filter reps under selected team lead + Team ABC reps not yet assigned to a manager
+    _no_manager = df['Manager_Direct'].isna() | df['Manager_Direct'].astype(str).str.strip().str.lower().isin(['', 'nan', 'none'])
+    _in_training = (df['Team Name'].astype(str).str.strip().str.lower() == 'team abc') & _no_manager
     team_df = df[(df['Manager_Direct'] == selected_lead) | _in_training].copy()
     if 'Name_Proper' not in team_df.columns:
         if 'Full_Name' in team_df.columns:
