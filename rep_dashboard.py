@@ -268,6 +268,12 @@ def load_data(_cache_bust_key: str):
         import traceback
         print(f"[load_data] RepHistory sheet enrichment failed: {_e}\n{traceback.format_exc()}")
 
+    # Recalculate Conversion from Redshift Wins + live Calls so the leaderboard
+    # reflects current data rather than whatever the Google Sheet formula last computed.
+    _wins  = pd.to_numeric(df.get('Wins',  0), errors='coerce').fillna(0)
+    _calls = pd.to_numeric(df.get('Calls', 0), errors='coerce').fillna(0)
+    df['Conversion'] = (_wins / _calls.replace(0, pd.NA) * 100).fillna(0).round(2)
+
     return df
 
 def show_yesterday_service_top(df, column_name, emoji, title):
