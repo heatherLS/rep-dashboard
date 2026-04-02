@@ -1423,7 +1423,14 @@ if page == "📊 Leaderboard":
    # 🏊 Top 3 Reps
     active_df[conversion_col] = active_df[conversion_col].astype(str).str.replace('%', '').str.strip()
     active_df[conversion_col] = pd.to_numeric(active_df[conversion_col], errors='coerce').fillna(0)
-    leaderboard = active_df[['Full_Name', conversion_col]].sort_values(by=conversion_col, ascending=False).reset_index(drop=True)
+    # Deduplicate by rep name — reps with multiple team rows (e.g. Team ABC + assigned team) would
+    # otherwise appear multiple times. Keep the row with the highest conversion.
+    leaderboard = (
+        active_df[['Full_Name', conversion_col]]
+        .sort_values(by=conversion_col, ascending=False)
+        .drop_duplicates(subset='Full_Name', keep='first')
+        .reset_index(drop=True)
+    )
     leaderboard['Rank'] = leaderboard.index + 1
 
     st.markdown("<h2 style='text-align: center;'>🏅 Top 3 Reps</h2>", unsafe_allow_html=True)
@@ -1440,7 +1447,13 @@ if page == "📊 Leaderboard":
         df['Team_Logo'] = df['Team Name'].apply(
             lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='40'>" if pd.notna(name) else ""
         )
-        leaderboard = leaderboard.merge(df[['Full_Name', 'Team_Logo']], on='Full_Name', how='left')
+        # Deduplicate logo lookup — prefer non-Team ABC row so assigned reps show their real team logo
+        _logo_lookup = (
+            df[['Full_Name', 'Team Name', 'Team_Logo']]
+            .sort_values('Team Name', key=lambda s: s.str.strip().str.lower() == 'team abc')
+            .drop_duplicates(subset='Full_Name', keep='first')[['Full_Name', 'Team_Logo']]
+        )
+        leaderboard = leaderboard.merge(_logo_lookup, on='Full_Name', how='left')
         leaderboard_display = leaderboard[['Rank', 'Full_Name', conversion_col, 'Team_Logo']].copy()
         leaderboard_display.columns = ['Rank', 'Rep Name', 'Conversion (%)', 'Team Logo']
 
