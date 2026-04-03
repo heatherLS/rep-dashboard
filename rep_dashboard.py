@@ -1423,7 +1423,13 @@ if page == "📊 Leaderboard":
    # 🏊 Top 3 Reps
     active_df[conversion_col] = active_df[conversion_col].astype(str).str.replace('%', '').str.strip()
     active_df[conversion_col] = pd.to_numeric(active_df[conversion_col], errors='coerce').fillna(0)
-    leaderboard = active_df[['Full_Name', conversion_col]].sort_values(by=conversion_col, ascending=False).reset_index(drop=True)
+    # Deduplicate: reps in both Team ABC and an assigned team have duplicate rows.
+    # Prefer non-Team ABC row so they show under their real team.
+    _lb = active_df.copy()
+    _lb['_is_abc'] = _lb['Team Name'].astype(str).str.strip().str.lower() == 'team abc'
+    _lb = _lb.sort_values(by=[conversion_col, '_is_abc'], ascending=[False, True])
+    _lb = _lb.drop_duplicates(subset='Full_Name', keep='first')
+    leaderboard = _lb[['Full_Name', conversion_col]].reset_index(drop=True)
     leaderboard['Rank'] = leaderboard.index + 1
 
     st.markdown("<h2 style='text-align: center;'>🏅 Top 3 Reps</h2>", unsafe_allow_html=True)
@@ -1440,7 +1446,11 @@ if page == "📊 Leaderboard":
         df['Team_Logo'] = df['Team Name'].apply(
             lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='40'>" if pd.notna(name) else ""
         )
-        leaderboard = leaderboard.merge(df[['Full_Name', 'Team_Logo']], on='Full_Name', how='left')
+        # Deduplicate logo lookup — one row per rep, preferring non-Team ABC
+        _logo = df[['Full_Name', 'Team Name', 'Team_Logo']].copy()
+        _logo['_is_abc'] = _logo['Team Name'].astype(str).str.strip().str.lower() == 'team abc'
+        _logo = _logo.sort_values('_is_abc').drop_duplicates(subset='Full_Name', keep='first')[['Full_Name', 'Team_Logo']]
+        leaderboard = leaderboard.merge(_logo, on='Full_Name', how='left')
         leaderboard_display = leaderboard[['Rank', 'Full_Name', conversion_col, 'Team_Logo']].copy()
         leaderboard_display.columns = ['Rank', 'Rep Name', 'Conversion (%)', 'Team Logo']
 

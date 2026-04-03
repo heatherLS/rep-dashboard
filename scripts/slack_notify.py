@@ -200,7 +200,10 @@ def _compute_stats(df: pd.DataFrame, min_calls_team: int = MIN_CALLS_TEAM):
     rep_df = df[df['Calls'] >= MIN_CALLS_REP].copy()
     rep_df['Conversion'] = (rep_df['Wins'] / rep_df['Calls'].replace(0, pd.NA)) * 100
     rep_df['Conversion'] = rep_df['Conversion'].fillna(0)
-    rep_df = rep_df.sort_values(['Conversion', 'Wins'], ascending=[False, False])
+    # Sort: best conversion first; within ties, prefer non-Team ABC so reps show their real team
+    rep_df['_is_team_abc'] = rep_df['Team Name'].astype(str).str.strip().str.lower() == 'team abc'
+    rep_df = rep_df.sort_values(['Conversion', 'Wins', '_is_team_abc'], ascending=[False, False, True])
+    rep_df = rep_df.drop_duplicates(subset='Full_Name', keep='first').drop(columns='_is_team_abc')
     top_conv = [
         (row['Full_Name'], float(row['Conversion']), int(row['Wins']), int(row['Calls']),
          str(row.get('Team Name', '')))
@@ -214,7 +217,9 @@ def _compute_stats(df: pd.DataFrame, min_calls_team: int = MIN_CALLS_TEAM):
     svc_cols = [c for c in ATTACH_SERVICES if c in attach_df.columns]
     attach_df['Attach_Count'] = attach_df[svc_cols].sum(axis=1)
     attach_df = attach_df[attach_df['Attach_Count'] > 0]
-    attach_df = attach_df.sort_values(['Attach_Count', 'Wins'], ascending=[False, False])
+    attach_df['_is_team_abc'] = attach_df['Team Name'].astype(str).str.strip().str.lower() == 'team abc'
+    attach_df = attach_df.sort_values(['Attach_Count', 'Wins', '_is_team_abc'], ascending=[False, False, True])
+    attach_df = attach_df.drop_duplicates(subset='Full_Name', keep='first').drop(columns='_is_team_abc')
 
     # Short service name map for display
     SVC_SHORT = {
