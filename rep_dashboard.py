@@ -228,13 +228,20 @@ def load_history(_cache_bust_key: str):
 
 
 
+# Live same-day call counts from Five9 (syncs hourly)
+_TODAY_CONVERSION_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU"
+    "/export?format=csv&gid=356398595"
+)
+
 @st.cache_data(show_spinner=False, ttl=300)
 def load_data(_cache_bust_key: str):
     df = pd.read_csv(sheet_url, header=1)
 
     # Enrich today's attach metrics with Redshift data (hourly Google Sheet sync)
     # Replaces: Wins, Lawn Treatment, Mosquito, Bush Trimming, Flower Bed Weeding, Leaf Removal
-    # Keeps from Sheet: Calls, Conversion, QA, Bonus, rep metadata (no same-day Five9)
+    # Keeps from Sheet: QA, Bonus, rep metadata
     ATTACH_COLS = ['Wins', 'Lawn Treatment', 'Mosquito', 'Bush Trimming', 'Flower Bed Weeding', 'Leaf Removal']
 
     # Always zero out attach cols — Google Forms data is never used for these
@@ -268,8 +275,25 @@ def load_data(_cache_bust_key: str):
         import traceback
         print(f"[load_data] RepHistory sheet enrichment failed: {_e}\n{traceback.format_exc()}")
 
-    # Recalculate Conversion from Redshift Wins + live Calls so the leaderboard
-    # reflects current data rather than whatever the Google Sheet formula last computed.
+    # Pull live call counts from TodayONLYConversion (Five9, syncs hourly)
+    # This replaces the stale Calls column from RepData which causes inflated conversion.
+    try:
+        today_conv = pd.read_csv(_TODAY_CONVERSION_URL, header=0)
+        today_conv.columns = today_conv.columns.str.strip()
+        today_conv = today_conv[today_conv['Email'].notna()].copy()
+        today_conv['_rep_key'] = today_conv['Email'].astype(str).str.lower().str.strip()
+        today_conv['_live_calls'] = pd.to_numeric(today_conv.get('All in Calls', 0), errors='coerce').fillna(0)
+
+        call_map = today_conv.set_index('_rep_key')['_live_calls'].to_dict()
+
+        df['_rep_key'] = df['Rep'].astype(str).str.lower().str.strip()
+        df['Calls'] = df['_rep_key'].map(call_map).fillna(0)
+        df.drop(columns=['_rep_key'], inplace=True)
+    except Exception as _e:
+        import traceback
+        print(f"[load_data] TodayONLYConversion call sync failed: {_e}\n{traceback.format_exc()}")
+
+    # Recalculate Conversion from Redshift Wins + live Five9 Calls
     _wins  = pd.to_numeric(df.get('Wins',  0), errors='coerce').fillna(0)
     _calls = pd.to_numeric(df.get('Calls', 0), errors='coerce').fillna(0)
     df['Conversion'] = (_wins / _calls.replace(0, pd.NA) * 100).fillna(0).round(2)
