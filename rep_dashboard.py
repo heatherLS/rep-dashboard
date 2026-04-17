@@ -282,13 +282,28 @@ def load_data(_cache_bust_key: str):
         today_conv.columns = today_conv.columns.str.strip()
         today_conv = today_conv[today_conv['Email'].notna()].copy()
         today_conv['_rep_key'] = today_conv['Email'].astype(str).str.lower().str.strip()
-        today_conv['_live_calls'] = pd.to_numeric(today_conv.get('All in Calls', 0), errors='coerce').fillna(0)
+
+        # Find the calls column regardless of exact capitalisation ('All in Calls', 'All In Calls', etc.)
+        _calls_col = next(
+            (c for c in today_conv.columns if c.lower().replace(' ', '') == 'allincalls'),
+            None
+        )
+        if _calls_col:
+            today_conv['_live_calls'] = pd.to_numeric(today_conv[_calls_col], errors='coerce').fillna(0)
+        else:
+            today_conv['_live_calls'] = 0
+            print(f"[load_data] TodayONLYConversion: 'All in Calls' column not found. Columns: {list(today_conv.columns)}")
 
         call_map = today_conv.set_index('_rep_key')['_live_calls'].to_dict()
 
-        df['_rep_key'] = df['Rep'].astype(str).str.lower().str.strip()
-        df['Calls'] = df['_rep_key'].map(call_map).fillna(0)
-        df.drop(columns=['_rep_key'], inplace=True)
+        # Only replace Calls if we actually got non-zero data — avoids blanking the leaderboard
+        # if the sheet is temporarily empty or misconfigured.
+        if call_map and any(v > 0 for v in call_map.values()):
+            df['_rep_key'] = df['Rep'].astype(str).str.lower().str.strip()
+            df['Calls'] = df['_rep_key'].map(call_map).fillna(0)
+            df.drop(columns=['_rep_key'], inplace=True)
+        else:
+            print("[load_data] TodayONLYConversion returned all-zero calls — keeping original Calls column")
     except Exception as _e:
         import traceback
         print(f"[load_data] TodayONLYConversion call sync failed: {_e}\n{traceback.format_exc()}")
