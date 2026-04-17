@@ -239,10 +239,10 @@ _TODAY_CONVERSION_URL = (
 def load_data(_cache_bust_key: str):
     df = pd.read_csv(sheet_url, header=1)
 
-    # Enrich today's attach metrics with Redshift data (hourly Google Sheet sync)
-    # Replaces: Wins, Lawn Treatment, Mosquito, Bush Trimming, Flower Bed Weeding, Leaf Removal
+    # Enrich today's metrics with Redshift data (hourly Google Sheet sync)
+    # Replaces: Wins, Calls, Lawn Treatment, Mosquito, Bush Trimming, Flower Bed Weeding, Leaf Removal
     # Keeps from Sheet: QA, Bonus, rep metadata
-    ATTACH_COLS = ['Wins', 'Lawn Treatment', 'Mosquito', 'Bush Trimming', 'Flower Bed Weeding', 'Leaf Removal']
+    ATTACH_COLS = ['Wins', 'Calls', 'Lawn Treatment', 'Mosquito', 'Bush Trimming', 'Flower Bed Weeding', 'Leaf Removal']
 
     # Always zero out attach cols — Google Forms data is never used for these
     for _col in ATTACH_COLS:
@@ -938,7 +938,11 @@ if page == "📊 Leaderboard":
     # Identity comes from SSO auth (set in session_state by the View As sidebar block)
     user = st.session_state.get("selected_rep", viewed_email)
 
-    active_df = df[df['Calls'] >= 1]
+    # Use reps with calls as primary filter; fall back to reps with wins when
+    # call data isn't available yet (TodayONLYConversion sheet not populated).
+    _calls_available = pd.to_numeric(df['Calls'], errors='coerce').fillna(0).sum() > 0
+    active_df = df[pd.to_numeric(df['Calls'], errors='coerce').fillna(0) >= 1].copy() if _calls_available \
+        else df[pd.to_numeric(df['Wins'], errors='coerce').fillna(0) > 0].copy()
     user_data = df[df[rep_col] == user]
     if user_data is None or user_data.empty:
         first_name = user_given_name or (user.split()[0] if user else "Rep")
