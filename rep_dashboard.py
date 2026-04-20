@@ -338,7 +338,7 @@ def load_data(_cache_bust_key: str):
     # Enrich service attach metrics with Redshift data (hourly Google Sheet sync)
     # Wins + Calls come from Five9 Gmail CSV below — do NOT include them here
     # Keeps from Sheet: QA, Bonus, rep metadata
-    ATTACH_COLS = ['Lawn Treatment', 'Mosquito', 'Bush Trimming', 'Flower Bed Weeding', 'Leaf Removal', 'Pool']
+    ATTACH_COLS = ['Wins', 'Lawn Treatment', 'Mosquito', 'Bush Trimming', 'Flower Bed Weeding', 'Leaf Removal', 'Pool']
 
     # Always zero out attach cols — Google Forms data is never used for these
     for _col in ATTACH_COLS:
@@ -374,15 +374,16 @@ def load_data(_cache_bust_key: str):
     # Pull real-time Calls + Wins from Five9 Gmail CSV (updates every 5 min)
     five9 = fetch_five9_gmail(_cache_bust_key)
     if five9:
+        # Gmail succeeded — override both Calls and Wins with real-time Five9 data
         df['_rep_key'] = df['Rep'].astype(str).str.lower().str.strip()
         df['Calls'] = df['_rep_key'].map({k: v['calls'] for k, v in five9.items()}).fillna(0)
         df['Wins']  = df['_rep_key'].map({k: v['wins']  for k, v in five9.items()}).fillna(0)
         df.drop(columns=['_rep_key'], inplace=True)
     else:
-        # Fallback: zero out both so conversion doesn't show phantom data
+        # Gmail failed — keep Wins from RepHistory (already set via ATTACH_COLS above),
+        # just zero Calls so conversion doesn't show phantom data
         df['Calls'] = 0
-        df['Wins']  = 0
-        print("[load_data] Five9 Gmail fetch returned empty — leaderboard will show wins-based fallback")
+        print("[load_data] Five9 Gmail fetch failed — Wins from RepHistory, Calls=0")
 
     # Recalculate Conversion from Redshift Wins + live Five9 Calls
     _wins  = pd.to_numeric(df.get('Wins',  0), errors='coerce').fillna(0)
