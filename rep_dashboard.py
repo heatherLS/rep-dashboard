@@ -165,8 +165,8 @@ st.markdown(
 
 st.title("🌟 Sales Rep Performance Dashboard")
 
-# 🔁 Auto-refresh every 60 seconds to match Five9 report cadence
-st_autorefresh(interval=60000, key="datarefresh")
+# 🔁 Auto-refresh every 5 minutes to match Five9 report cadence
+st_autorefresh(interval=300000, key="datarefresh")
 
 page = st.selectbox(
     "Choose a page",
@@ -211,7 +211,7 @@ _EXCLUDE_FROM_CALLS = {
     "Call in Support", "Test", "Internal Call",
 }
 
-@st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner=False, ttl=300)
 def fetch_five9_gmail(_cache_bust_key: str) -> dict:
     """
     Fetch the latest Five9 call log CSV from Gmail.
@@ -861,7 +861,7 @@ if page == "📊 Leaderboard":
     from pytz import timezone
     eastern = timezone('US/Eastern')
     today = datetime.now(eastern).date()
-    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H-') + ('30' if datetime.now(eastern).minute >= 30 else '00')
+    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H-') + str(datetime.now(eastern).minute // 5 * 5).zfill(2)
 
     df = load_data(cache_bust_key).copy()
 
@@ -1907,7 +1907,7 @@ if page == "💰Bonus & History":
 
     from pytz import timezone
     eastern = timezone('US/Eastern')
-    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H-') + ('30' if datetime.now(eastern).minute >= 30 else '00')
+    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H-') + str(datetime.now(eastern).minute // 5 * 5).zfill(2)
     df = load_data(cache_bust_key).copy()
     df.columns = df.columns.str.strip()
 
@@ -2291,7 +2291,7 @@ if page == "📅 Yesterday":
 
     from pytz import timezone
     eastern = timezone('US/Eastern')
-    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H-') + ('30' if datetime.now(eastern).minute >= 30 else '00')
+    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H-') + str(datetime.now(eastern).minute // 5 * 5).zfill(2)
 
     history_df = load_history(cache_bust_key).copy()
     history_df.columns = history_df.columns.str.strip()
@@ -2577,7 +2577,7 @@ if page == "👩‍💻 Team Lead Dashboard":
 
     from pytz import timezone
     eastern = timezone('US/Eastern')
-    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H-') + ('30' if datetime.now(eastern).minute >= 30 else '00')
+    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H-') + str(datetime.now(eastern).minute // 5 * 5).zfill(2)
 
     df = load_data(cache_bust_key).copy()
     history_df = load_history(cache_bust_key).copy()
@@ -3236,7 +3236,7 @@ if page == "Senior Manager View":
         return " ".join(s.split())
 
     # --- Load frames from your existing functions ---
-    cache_bust_key = datetime.now(eastern).strftime("%Y-%m-%d-%H-") + ("30" if datetime.now(eastern).minute >= 30 else "00")
+    cache_bust_key = datetime.now(eastern).strftime("%Y-%m-%d-%H-") + str(datetime.now(eastern).minute // 5 * 5).zfill(2)
     df = load_data(cache_bust_key).copy()
     history_df = load_history(cache_bust_key).copy()
     if 'Name_Proper' not in history_df.columns:
