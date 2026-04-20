@@ -228,7 +228,7 @@ _POOL_WIN_CORRECTIONS = {
 # ---------------------------------------------------------------------------
 _POOL_RECORD_OVERRIDE = {
     "full_name": "Ashley Sagun",
-    "team": "Mownership",
+    "team": "The Cutting Edge",
     "value": 2,
     "date": "Apr 20, 2026",
 }
