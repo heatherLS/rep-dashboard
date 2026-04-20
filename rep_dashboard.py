@@ -287,16 +287,25 @@ def fetch_five9_gmail(_cache_bust_key: str) -> dict:
         if "AGENT EMAIL" not in df.columns:
             return {"__status__": f"BAD_COLS: CSV columns are {list(df.columns)[:10]}"}
 
+        # Strip whitespace from disposition values so " Pool Closed Won " still matches
+        df["DISPOSITION"] = df["DISPOSITION"].astype(str).str.strip()
+        df["AGENT EMAIL"] = df["AGENT EMAIL"].astype(str).str.strip()
+
         # Report is already scoped to "today" — no date filter needed
         df = df[~df["DISPOSITION"].isin(_EXCLUDE_FROM_CALLS)]
 
-        result = {"__status__": f"OK: {len(df)} rows, {df['AGENT EMAIL'].nunique()} reps"}
+        # All pool-related win dispositions (case-insensitive "pool" catch-all + known variants)
+        _pool_disps = df["DISPOSITION"].unique()
+        _pool_win_set = {d for d in _pool_disps if "pool" in d.lower()} | {"PF Closed Won"}
+
+        pool_wins_today = df["DISPOSITION"].isin(_pool_win_set).sum()
+        result = {"__status__": f"OK: {len(df)} rows, {df['AGENT EMAIL'].nunique()} reps, {pool_wins_today} pool wins"}
         for email, grp in df.groupby("AGENT EMAIL"):
             agent_name = grp["AGENT NAME"].iloc[0] if "AGENT NAME" in grp.columns else str(email)
             result[str(email).strip().lower()] = {
                 "calls":      int(len(grp)),
                 "wins":       int(grp["DISPOSITION"].isin(_WIN_DISPOSITIONS).sum()),
-                "pool_wins":  int((grp["DISPOSITION"] == "Pool Closed Won").sum()),
+                "pool_wins":  int(grp["DISPOSITION"].isin(_pool_win_set).sum()),
                 "agent_name": str(agent_name).strip(),
             }
         return result
