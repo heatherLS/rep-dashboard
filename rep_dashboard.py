@@ -221,6 +221,18 @@ _POOL_WIN_CORRECTIONS = {
     "ashley.brionessagun@lawnstarter.com": 1,  # Call 300000003336501 — "Closed Won" should be "Pool Closed Won"
 }
 
+# ---------------------------------------------------------------------------
+# Manual pool record override
+# Use when the all-time daily pool record was set today (Redshift won't have it yet).
+# Set to None to fall back to history automatically.
+# ---------------------------------------------------------------------------
+_POOL_RECORD_OVERRIDE = {
+    "full_name": "Ashley Sagun",
+    "team": "Mownership",
+    "value": 2,
+    "date": "Apr 20, 2026",
+}
+
 @st.cache_data(show_spinner=False, ttl=300)
 def fetch_five9_gmail(_cache_bust_key: str) -> dict:
     """
@@ -627,17 +639,36 @@ def get_records_to_beat(history_df):
     out = []
     for m in metrics:
         if m not in history_df.columns or history_df[m].max() == 0:
+            # Still include Pool if there's a manual override
+            if m == 'Pool' and _POOL_RECORD_OVERRIDE:
+                out.append({
+                    "metric": "Pool",
+                    "value": _POOL_RECORD_OVERRIDE["value"],
+                    "full_name": _POOL_RECORD_OVERRIDE["full_name"],
+                    "team": _POOL_RECORD_OVERRIDE["team"],
+                    "date": _POOL_RECORD_OVERRIDE["date"],
+                })
             continue
         idx = history_df[m].idxmax()
         row = history_df.loc[idx]
         full_name = f"{str(row.get('First_Name','')).strip()} {str(row.get('Last_Name','')).strip()}".strip() or str(row.get('Rep','Unknown'))
-        out.append({
+        record = {
             "metric": m,
             "value": int(row[m]),
             "full_name": full_name,
             "team": str(row.get('Team Name', 'Unknown')),
             "date": row['Date'].date() if pd.notna(row['Date']) else None
-        })
+        }
+        # If there's a manual pool override and it's higher, use it
+        if m == 'Pool' and _POOL_RECORD_OVERRIDE and _POOL_RECORD_OVERRIDE["value"] >= record["value"]:
+            record = {
+                "metric": "Pool",
+                "value": _POOL_RECORD_OVERRIDE["value"],
+                "full_name": _POOL_RECORD_OVERRIDE["full_name"],
+                "team": _POOL_RECORD_OVERRIDE["team"],
+                "date": _POOL_RECORD_OVERRIDE["date"],
+            }
+        out.append(record)
     return out
 
 def get_last_week_range():
@@ -1122,7 +1153,8 @@ if page == "📊 Leaderboard":
         pool_rec = next((r for r in records if r['metric'] == 'Pool'), None)
         other_recs = [r for r in records if r['metric'] != 'Pool']
         if pool_rec:
-            date_str = pool_rec['date'].strftime('%b %d, %Y') if pool_rec['date'] else '—'
+            _d = pool_rec['date']
+            date_str = _d if isinstance(_d, str) else (_d.strftime('%b %d, %Y') if _d else '—')
             st.markdown(f"""
             <div style='text-align:center; padding:24px; border:3px solid #06b6d4;
                  border-radius:18px;
