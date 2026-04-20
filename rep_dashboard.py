@@ -1,4 +1,6 @@
 import os
+import io
+import base64
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -163,8 +165,8 @@ st.markdown(
 
 st.title("🌟 Sales Rep Performance Dashboard")
 
-# 🔁 Auto-refresh every 30 minutes (1800000 ms)
-st_autorefresh(interval=1800000, key="datarefresh")
+# 🔁 Auto-refresh every 60 seconds to match Five9 report cadence
+st_autorefresh(interval=60000, key="datarefresh")
 
 page = st.selectbox(
     "Choose a page",
@@ -193,6 +195,100 @@ _HISTORY_SHEET_URL = (
 _HISTORY_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "rep_history.csv")
 if not os.path.exists(_HISTORY_CSV):
     _HISTORY_CSV = os.path.join(os.getcwd(), "data", "rep_history.csv")
+
+# ---------------------------------------------------------------------------
+# Five9 disposition mappings (sourced from dw_silver.fct_five9_calls)
+# ---------------------------------------------------------------------------
+_WIN_DISPOSITIONS = {
+    "Closed Won", "Closed Won- SALT", "PF Closed Won", "Pool Closed Won",
+    "EC MQ", "EC Mow", "EC Leaf", "EC LT", "EC Bush", "EC Flower Bed",
+    "EC Multiple services", "EC Disease Fungicide", "EC Aeration",
+    "EC Aeration Overseeding", "SA Leaf", "SA Bush", "SA Flower Bed",
+    "Additional Property",
+}
+_EXCLUDE_FROM_CALLS = {
+    "Support Call", "Transferred To 3rd Party", "Provider Inquiry",
+    "Call in Support", "Test", "Internal Call",
+}
+
+@st.cache_data(show_spinner=False, ttl=60)
+def fetch_five9_gmail(_cache_bust_key: str) -> dict:
+    """
+    Fetch the latest Five9 call log CSV from Gmail.
+    Returns {agent_email_lower -> {'calls': int, 'wins': int}}
+    Falls back to empty dict on any error so the dashboard degrades gracefully.
+    """
+    try:
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+
+        cfg = st.secrets.get("gmail", {})
+        if not cfg:
+            return {}
+
+        creds = Credentials(
+            token=None,
+            refresh_token=cfg["refresh_token"],
+            client_id=cfg["client_id"],
+            client_secret=cfg["client_secret"],
+            token_uri="https://oauth2.googleapis.com/token",
+            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+        )
+        service = build("gmail", "v1", credentials=creds)
+
+        results = service.users().messages().list(
+            userId="me",
+            q='from:reports-noreply@five9.com subject:"Scheduled Report: Conversion Tracker Call Log" newer_than:1d',
+            maxResults=1,
+        ).execute()
+
+        msgs = results.get("messages", [])
+        if not msgs:
+            return {}
+
+        msg = service.users().messages().get(
+            userId="me", id=msgs[0]["id"], format="full"
+        ).execute()
+
+        csv_bytes = None
+        for part in msg["payload"].get("parts", []):
+            if part.get("filename", "").endswith(".csv"):
+                att_id = part["body"].get("attachmentId")
+                if att_id:
+                    att = service.users().messages().attachments().get(
+                        userId="me", messageId=msg["id"], id=att_id
+                    ).execute()
+                    csv_bytes = base64.urlsafe_b64decode(att["data"])
+                else:
+                    csv_bytes = base64.urlsafe_b64decode(part["body"]["data"])
+                break
+
+        if csv_bytes is None:
+            return {}
+
+        df = pd.read_csv(io.BytesIO(csv_bytes))
+        df.columns = df.columns.str.strip()
+
+        from datetime import date as _date
+        today_str = _date.today().strftime("%Y/%m/%d")
+        df = df[df["DATE"].astype(str).str.strip() == today_str]
+        df = df[~df["DISPOSITION"].isin(_EXCLUDE_FROM_CALLS)]
+
+        result = {}
+        for email, grp in df.groupby("AGENT EMAIL"):
+            agent_name = grp["AGENT NAME"].iloc[0] if "AGENT NAME" in grp.columns else str(email)
+            result[str(email).strip().lower()] = {
+                "calls":      int(len(grp)),
+                "wins":       int(grp["DISPOSITION"].isin(_WIN_DISPOSITIONS).sum()),
+                "pool_wins":  int((grp["DISPOSITION"] == "Pool Closed Won").sum()),
+                "agent_name": str(agent_name).strip(),
+            }
+        return result
+
+    except Exception as _e:
+        import traceback
+        print(f"[fetch_five9_gmail] failed: {_e}\n{traceback.format_exc()}")
+        return {}
 
 @st.cache_data(show_spinner=False, ttl=1800)
 def load_history(_cache_bust_key: str):
@@ -239,10 +335,10 @@ _TODAY_CONVERSION_URL = (
 def load_data(_cache_bust_key: str):
     df = pd.read_csv(sheet_url, header=1)
 
-    # Enrich today's metrics with Redshift data (hourly Google Sheet sync)
-    # Replaces: Wins, Calls, Lawn Treatment, Mosquito, Bush Trimming, Flower Bed Weeding, Leaf Removal
+    # Enrich service attach metrics with Redshift data (hourly Google Sheet sync)
+    # Wins + Calls come from Five9 Gmail CSV below — do NOT include them here
     # Keeps from Sheet: QA, Bonus, rep metadata
-    ATTACH_COLS = ['Wins', 'Calls', 'Lawn Treatment', 'Mosquito', 'Bush Trimming', 'Flower Bed Weeding', 'Leaf Removal']
+    ATTACH_COLS = ['Lawn Treatment', 'Mosquito', 'Bush Trimming', 'Flower Bed Weeding', 'Leaf Removal', 'Pool']
 
     # Always zero out attach cols — Google Forms data is never used for these
     for _col in ATTACH_COLS:
@@ -275,38 +371,18 @@ def load_data(_cache_bust_key: str):
         import traceback
         print(f"[load_data] RepHistory sheet enrichment failed: {_e}\n{traceback.format_exc()}")
 
-    # Pull live call counts from TodayONLYConversion (Five9, syncs hourly)
-    # This replaces the stale Calls column from RepData which causes inflated conversion.
-    try:
-        today_conv = pd.read_csv(_TODAY_CONVERSION_URL, header=0)
-        today_conv.columns = today_conv.columns.str.strip()
-        today_conv = today_conv[today_conv['Email'].notna()].copy()
-        today_conv['_rep_key'] = today_conv['Email'].astype(str).str.lower().str.strip()
-
-        # Find the calls column regardless of exact capitalisation ('All in Calls', 'All In Calls', etc.)
-        _calls_col = next(
-            (c for c in today_conv.columns if c.lower().replace(' ', '') == 'allincalls'),
-            None
-        )
-        if _calls_col:
-            today_conv['_live_calls'] = pd.to_numeric(today_conv[_calls_col], errors='coerce').fillna(0)
-        else:
-            today_conv['_live_calls'] = 0
-            print(f"[load_data] TodayONLYConversion: 'All in Calls' column not found. Columns: {list(today_conv.columns)}")
-
-        call_map = today_conv.set_index('_rep_key')['_live_calls'].to_dict()
-
-        # Only replace Calls if we actually got non-zero data — avoids blanking the leaderboard
-        # if the sheet is temporarily empty or misconfigured.
-        if call_map and any(v > 0 for v in call_map.values()):
-            df['_rep_key'] = df['Rep'].astype(str).str.lower().str.strip()
-            df['Calls'] = df['_rep_key'].map(call_map).fillna(0)
-            df.drop(columns=['_rep_key'], inplace=True)
-        else:
-            print("[load_data] TodayONLYConversion returned all-zero calls — keeping original Calls column")
-    except Exception as _e:
-        import traceback
-        print(f"[load_data] TodayONLYConversion call sync failed: {_e}\n{traceback.format_exc()}")
+    # Pull real-time Calls + Wins from Five9 Gmail CSV (updates every 5 min)
+    five9 = fetch_five9_gmail(_cache_bust_key)
+    if five9:
+        df['_rep_key'] = df['Rep'].astype(str).str.lower().str.strip()
+        df['Calls'] = df['_rep_key'].map({k: v['calls'] for k, v in five9.items()}).fillna(0)
+        df['Wins']  = df['_rep_key'].map({k: v['wins']  for k, v in five9.items()}).fillna(0)
+        df.drop(columns=['_rep_key'], inplace=True)
+    else:
+        # Fallback: zero out both so conversion doesn't show phantom data
+        df['Calls'] = 0
+        df['Wins']  = 0
+        print("[load_data] Five9 Gmail fetch returned empty — leaderboard will show wins-based fallback")
 
     # Recalculate Conversion from Redshift Wins + live Five9 Calls
     _wins  = pd.to_numeric(df.get('Wins',  0), errors='coerce').fillna(0)
@@ -698,8 +774,58 @@ def render_all_iq_panels(df: pd.DataFrame, collapsible_specialty: bool = False):
         _render_iq_row(df, "🌱 Specialty IQs", SPECIALTY_IQS)
     st.caption("Only reps with >0 per IQ are shown. Panels auto-hide if no sales.")
 
+def render_pool_realtime_banner(five9_data: dict):
+    """
+    Real-time pool sales banner — driven by Five9 Gmail CSV (updates every 5 min).
+    Shows every rep with a Pool Closed Won disposition today.
+    """
+    pool_sellers = [
+        (v["agent_name"], v["pool_wins"])
+        for v in five9_data.values()
+        if v.get("pool_wins", 0) > 0
+    ]
+    if not pool_sellers:
+        return
+
+    pool_sellers.sort(key=lambda x: -x[1])
+    total = sum(n for _, n in pool_sellers)
+
+    names_html = " &nbsp;·&nbsp; ".join(
+        f"<b>{name}</b> ({n} {'sale' if n == 1 else 'sales'})"
+        for name, n in pool_sellers
+    )
+
+    emoji_row = "🏊 " * min(total, 10)
+
+    st.markdown(
+        f"""
+        <div style="
+            border:3px solid #06b6d4;
+            background:linear-gradient(135deg,rgba(6,182,212,0.22),rgba(6,182,212,0.06));
+            padding:20px 24px;
+            border-radius:16px;
+            margin-bottom:16px;
+            box-shadow:0 4px 24px rgba(6,182,212,0.35);
+            text-align:center;
+        ">
+            <div style="font-size:13px;font-weight:800;color:#06b6d4;text-transform:uppercase;letter-spacing:2px;margin-bottom:4px;">
+                🏊 #1 PRIORITY — POOL SALES TODAY
+            </div>
+            <div style="font-size:42px;font-weight:900;color:#06b6d4;line-height:1.1;margin:6px 0;">
+                {total} Pool {'Sale' if total == 1 else 'Sales'}!
+            </div>
+            <div style="font-size:22px;margin:6px 0;">{emoji_row}</div>
+            <div style="font-size:16px;margin-top:10px;line-height:1.8;">
+                {names_html}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_pool_splash_banners(df: pd.DataFrame):
-    """Hero banner for Pool sales — Pool is the #1 priority metric."""
+    """Secondary pool banner from Redshift (hourly) — shows individual splash alerts."""
     if "Pool" not in df.columns:
         return
     tmp = df[['Full_Name', 'Pool']].copy()
@@ -707,34 +833,7 @@ def render_pool_splash_banners(df: pd.DataFrame):
     tmp = tmp[tmp['Pool'] > 0].sort_values('Pool', ascending=False)
     if tmp.empty:
         return
-    total_pool = int(tmp['Pool'].sum())
-    top_rep = tmp.iloc[0]
-    # Hero summary banner
-    st.markdown(
-        f"""
-        <div style="
-            border:3px solid #06b6d4;
-            background:linear-gradient(135deg,rgba(6,182,212,0.22),rgba(6,182,212,0.06));
-            padding:18px 20px;
-            border-radius:16px;
-            margin-bottom:14px;
-            box-shadow:0 4px 20px rgba(6,182,212,0.30);
-            text-align:center;
-        ">
-            <div style="font-size:13px;font-weight:800;color:#06b6d4;text-transform:uppercase;letter-spacing:2px;">
-                🏊 #1 PRIORITY — POOL
-            </div>
-            <div style="font-size:28px;font-weight:900;color:#06b6d4;margin:6px 0;">
-                {total_pool} Pool {'Sale' if total_pool==1 else 'Sales'} Today!
-            </div>
-            <div style="font-size:15px;">
-                🥇 Leading: <b>{top_rep['Full_Name']}</b> — {int(top_rep['Pool'])} {'sale' if top_rep['Pool']==1 else 'sales'}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-    # Individual splash alerts
+    # Individual splash alerts only (summary now handled by render_pool_realtime_banner)
     for _, r in tmp.iterrows():
         st.markdown(
             f"""
@@ -753,7 +852,6 @@ def render_pool_splash_banners(df: pd.DataFrame):
             """,
             unsafe_allow_html=True
         )
-    st.balloons()
 
 
 if page == "📊 Leaderboard":
@@ -932,7 +1030,11 @@ if page == "📊 Leaderboard":
             unsafe_allow_html=True
         )
 
-    # 🏊 Pool splash shoutouts at the very top
+    # 🏊 Real-time pool sales banner (Five9 CSV — updates every 5 min)
+    _five9_live = fetch_five9_gmail(cache_bust_key)
+    render_pool_realtime_banner(_five9_live)
+
+    # 🏊 Individual pool splash alerts (Redshift — hourly)
     render_pool_splash_banners(df)
 
     # Identity comes from SSO auth (set in session_state by the View As sidebar block)
