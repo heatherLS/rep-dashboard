@@ -269,9 +269,7 @@ def fetch_five9_gmail(_cache_bust_key: str) -> dict:
         df = pd.read_csv(io.BytesIO(csv_bytes))
         df.columns = df.columns.str.strip()
 
-        from datetime import date as _date
-        today_str = _date.today().strftime("%Y/%m/%d")
-        df = df[df["DATE"].astype(str).str.strip() == today_str]
+        # Report is already scoped to "today" — no date filter needed
         df = df[~df["DISPOSITION"].isin(_EXCLUDE_FROM_CALLS)]
 
         result = {}
