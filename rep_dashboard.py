@@ -292,7 +292,8 @@ def fetch_five9_gmail(_cache_bust_key: str) -> dict:
 
         # All pool-related win dispositions (case-insensitive "pool" catch-all + known variants)
         _pool_disps = df["DISPOSITION"].dropna().unique()
-        _pool_win_set = {d for d in _pool_disps if isinstance(d, str) and "pool" in d.lower()} | {"PF Closed Won"}
+        # Pool wins = any disposition with "pool" in the name only (PF Closed Won = Payment First, not pool)
+        _pool_win_set = {d for d in _pool_disps if isinstance(d, str) and "pool" in d.lower()}
 
         pool_wins_today = df["DISPOSITION"].isin(_pool_win_set).sum()
         result = {"__status__": f"OK: {len(df)} rows, {df['AGENT EMAIL'].nunique()} reps, {pool_wins_today} pool wins"}
