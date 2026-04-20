@@ -211,6 +211,16 @@ _EXCLUDE_FROM_CALLS = {
     "Call in Support", "Test", "Internal Call",
 }
 
+# ---------------------------------------------------------------------------
+# Manual pool win corrections
+# Use when a rep closes a pool sale but uses the wrong disposition in Five9.
+# Format: { "agent.email@lawnstarter.com": extra_pool_wins }
+# Clear entries once the rep re-dispositions or the day rolls over.
+# ---------------------------------------------------------------------------
+_POOL_WIN_CORRECTIONS = {
+    "ashley.brionessagun@lawnstarter.com": 1,  # Call 300000003336501 — "Closed Won" should be "Pool Closed Won"
+}
+
 @st.cache_data(show_spinner=False, ttl=300)
 def fetch_five9_gmail(_cache_bust_key: str) -> dict:
     """
@@ -299,10 +309,14 @@ def fetch_five9_gmail(_cache_bust_key: str) -> dict:
         result = {"__status__": f"OK: {len(df)} rows, {df['AGENT EMAIL'].nunique()} reps, {pool_wins_today} pool wins"}
         for email, grp in df.groupby("AGENT EMAIL"):
             agent_name = grp["AGENT NAME"].iloc[0] if "AGENT NAME" in grp.columns else str(email)
-            result[str(email).strip().lower()] = {
+            email_key = str(email).strip().lower()
+            pool_wins = int(grp["DISPOSITION"].isin(_pool_win_set).sum())
+            # Apply manual corrections for mis-dispositioned calls
+            pool_wins += _POOL_WIN_CORRECTIONS.get(email_key, 0)
+            result[email_key] = {
                 "calls":      int(len(grp)),
                 "wins":       int(grp["DISPOSITION"].isin(_WIN_DISPOSITIONS).sum()),
-                "pool_wins":  int(grp["DISPOSITION"].isin(_pool_win_set).sum()),
+                "pool_wins":  pool_wins,
                 "agent_name": str(agent_name).strip(),
             }
         return result
