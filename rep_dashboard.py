@@ -215,64 +215,82 @@ _EXCLUDE_FROM_CALLS = {
 def fetch_five9_gmail(_cache_bust_key: str) -> dict:
     """
     Fetch the latest Five9 call log CSV from Gmail.
-    Returns {agent_email_lower -> {'calls': int, 'wins': int}}
-    Falls back to empty dict on any error so the dashboard degrades gracefully.
+    Returns {agent_email_lower -> {'calls': int, 'wins': int, 'pool_wins': int, 'agent_name': str}}
+    Always includes '__status__' key with a diagnostic string (never shown to reps, used for debug).
     """
     try:
         from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
+        import google.auth.transport.requests as _gatr
 
         cfg = st.secrets.get("gmail", {})
         if not cfg:
-            return {}
+            return {"__status__": "NO_SECRETS: [gmail] section missing from Streamlit secrets"}
 
         creds = Credentials(
             token=None,
-            refresh_token=cfg["refresh_token"],
-            client_id=cfg["client_id"],
-            client_secret=cfg["client_secret"],
+            refresh_token=cfg.get("refresh_token"),
+            client_id=cfg.get("client_id"),
+            client_secret=cfg.get("client_secret"),
             token_uri="https://oauth2.googleapis.com/token",
             scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         )
+
+        # Force a token refresh so we catch auth errors early
+        request = _gatr.Request()
+        creds.refresh(request)
+
         service = build("gmail", "v1", credentials=creds)
 
         results = service.users().messages().list(
             userId="me",
-            q='from:reports-noreply@five9.com subject:"Scheduled Report: Conversion Tracker Call Log" newer_than:1d',
+            q='from:reports-noreply@five9.com subject:"Conversion Tracker Call Log" newer_than:1d',
             maxResults=1,
         ).execute()
 
         msgs = results.get("messages", [])
         if not msgs:
-            return {}
+            return {"__status__": "NO_EMAIL: No Five9 report found in inbox (last 24h)"}
 
         msg = service.users().messages().get(
             userId="me", id=msgs[0]["id"], format="full"
         ).execute()
 
         csv_bytes = None
-        for part in msg["payload"].get("parts", []):
-            if part.get("filename", "").endswith(".csv"):
+        parts = msg["payload"].get("parts", [])
+        # Also check nested parts (multipart/mixed inside multipart/related etc.)
+        all_parts = list(parts)
+        for part in parts:
+            all_parts.extend(part.get("parts", []))
+
+        for part in all_parts:
+            fname = part.get("filename", "")
+            if fname.lower().endswith(".csv"):
                 att_id = part["body"].get("attachmentId")
                 if att_id:
                     att = service.users().messages().attachments().get(
                         userId="me", messageId=msg["id"], id=att_id
                     ).execute()
                     csv_bytes = base64.urlsafe_b64decode(att["data"])
-                else:
+                elif part["body"].get("data"):
                     csv_bytes = base64.urlsafe_b64decode(part["body"]["data"])
                 break
 
         if csv_bytes is None:
-            return {}
+            # Log part names for diagnosis
+            part_names = [p.get("filename", p.get("mimeType", "?")) for p in all_parts]
+            return {"__status__": f"NO_CSV: Email found but no .csv attachment. Parts: {part_names}"}
 
         df = pd.read_csv(io.BytesIO(csv_bytes))
         df.columns = df.columns.str.strip()
 
+        if "AGENT EMAIL" not in df.columns:
+            return {"__status__": f"BAD_COLS: CSV columns are {list(df.columns)[:10]}"}
+
         # Report is already scoped to "today" — no date filter needed
         df = df[~df["DISPOSITION"].isin(_EXCLUDE_FROM_CALLS)]
 
-        result = {}
+        result = {"__status__": f"OK: {len(df)} rows, {df['AGENT EMAIL'].nunique()} reps"}
         for email, grp in df.groupby("AGENT EMAIL"):
             agent_name = grp["AGENT NAME"].iloc[0] if "AGENT NAME" in grp.columns else str(email)
             result[str(email).strip().lower()] = {
@@ -285,8 +303,9 @@ def fetch_five9_gmail(_cache_bust_key: str) -> dict:
 
     except Exception as _e:
         import traceback
-        print(f"[fetch_five9_gmail] failed: {_e}\n{traceback.format_exc()}")
-        return {}
+        tb = traceback.format_exc()
+        print(f"[fetch_five9_gmail] failed: {_e}\n{tb}")
+        return {"__status__": f"EXCEPTION: {type(_e).__name__}: {str(_e)[:200]}"}
 
 @st.cache_data(show_spinner=False, ttl=1800)
 def load_history(_cache_bust_key: str):
@@ -370,7 +389,11 @@ def load_data(_cache_bust_key: str):
         print(f"[load_data] RepHistory sheet enrichment failed: {_e}\n{traceback.format_exc()}")
 
     # Pull real-time Calls + Wins from Five9 Gmail CSV (updates every 5 min)
-    five9 = fetch_five9_gmail(_cache_bust_key)
+    _five9_raw = fetch_five9_gmail(_cache_bust_key)
+    # Strip the diagnostic key before treating dict as rep data
+    _gmail_status = _five9_raw.pop("__status__", "NO_STATUS")
+    five9 = _five9_raw  # now clean rep-data only
+    print(f"[load_data] Gmail status: {_gmail_status}")
     if five9:
         # Gmail succeeded — override both Calls and Wins with real-time Five9 data
         df['_rep_key'] = df['Rep'].astype(str).str.lower().str.strip()
@@ -381,7 +404,7 @@ def load_data(_cache_bust_key: str):
         # Gmail failed — keep Wins from RepHistory (already set via ATTACH_COLS above),
         # just zero Calls so conversion doesn't show phantom data
         df['Calls'] = 0
-        print("[load_data] Five9 Gmail fetch failed — Wins from RepHistory, Calls=0")
+        print(f"[load_data] Five9 Gmail fetch failed ({_gmail_status}) — Wins from RepHistory, Calls=0")
 
     # Recalculate Conversion from Redshift Wins + live Five9 Calls
     _wins  = pd.to_numeric(df.get('Wins',  0), errors='coerce').fillna(0)
@@ -1030,7 +1053,14 @@ if page == "📊 Leaderboard":
         )
 
     # 🏊 Real-time pool sales banner (Five9 CSV — updates every 5 min)
-    _five9_live = fetch_five9_gmail(cache_bust_key)
+    _five9_raw_live = fetch_five9_gmail(cache_bust_key)
+    _gmail_diag = _five9_raw_live.pop("__status__", "")
+    _five9_live = _five9_raw_live  # clean rep data only
+    # Show Gmail connection status (small, unobtrusive — helps diagnose issues)
+    if _five9_live:
+        st.caption(f"📡 Live Five9 data: {len(_five9_live)} reps · {_gmail_diag}")
+    else:
+        st.caption(f"⚠️ Live Five9 data unavailable — {_gmail_diag}")
     render_pool_realtime_banner(_five9_live)
 
     # 🏊 Individual pool splash alerts (Redshift — hourly)
