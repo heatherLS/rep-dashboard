@@ -221,7 +221,6 @@ def fetch_five9_gmail(_cache_bust_key: str) -> dict:
     try:
         from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
-        import google.auth.transport.requests as _gatr
 
         cfg = st.secrets.get("gmail", {})
         if not cfg:
@@ -235,10 +234,7 @@ def fetch_five9_gmail(_cache_bust_key: str) -> dict:
             token_uri="https://oauth2.googleapis.com/token",
             scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         )
-
-        # Force a token refresh so we catch auth errors early
-        request = _gatr.Request()
-        creds.refresh(request)
+        # Let the API client handle token refresh automatically — no explicit refresh needed
 
         service = build("gmail", "v1", credentials=creds)
 
@@ -1061,15 +1057,23 @@ if page == "📊 Leaderboard":
             unsafe_allow_html=True
         )
 
+    # 🔄 Force refresh button — clears all caches and re-fetches immediately
+    _col_refresh, _col_status = st.columns([1, 5])
+    with _col_refresh:
+        if st.button("🔄 Force Refresh", key="force_refresh_conv"):
+            st.cache_data.clear()
+            st.rerun()
+
     # 🏊 Real-time pool sales banner (Five9 CSV — updates every 5 min)
     _five9_raw_live = fetch_five9_gmail(cache_bust_key)
     _gmail_diag = _five9_raw_live.pop("__status__", "")
     _five9_live = _five9_raw_live  # clean rep data only
-    # Show Gmail connection status (small, unobtrusive — helps diagnose issues)
-    if _five9_live:
-        st.caption(f"📡 Live Five9 data: {len(_five9_live)} reps · {_gmail_diag}")
-    else:
-        st.caption(f"⚠️ Live Five9 data unavailable — {_gmail_diag}")
+    # Show Gmail connection status
+    with _col_status:
+        if _five9_live:
+            st.caption(f"📡 Live Five9 data: {len(_five9_live)} reps · {_gmail_diag}")
+        else:
+            st.caption(f"⚠️ Live Five9 data unavailable — {_gmail_diag}")
     render_pool_realtime_banner(_five9_live)
 
     # 🏊 Individual pool splash alerts (Redshift — hourly)
