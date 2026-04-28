@@ -1,5 +1,6 @@
 import os
 import io
+import re
 import base64
 import streamlit as st
 import pandas as pd
@@ -176,7 +177,8 @@ page = st.selectbox(
         "💰Bonus & History",
         "📅 Yesterday",
         "👩‍💻 Team Lead Dashboard",
-        "Senior Manager View"
+        "Senior Manager View",
+        "📋 My QA",
     ]
 )
 
@@ -217,9 +219,7 @@ _EXCLUDE_FROM_CALLS = {
 # Format: { "agent.email@lawnstarter.com": extra_pool_wins }
 # Clear entries once the rep re-dispositions or the day rolls over.
 # ---------------------------------------------------------------------------
-_POOL_WIN_CORRECTIONS = {
-    "ashley.brionessagun@lawnstarter.com": 1,  # Call 300000003336501 — "Closed Won" should be "Pool Closed Won"
-}
+_POOL_WIN_CORRECTIONS = {}
 
 # ---------------------------------------------------------------------------
 # Manual pool record override
@@ -3679,5 +3679,187 @@ if page == "Senior Manager View":
             st.info("Not enough data yet to compute accountability roll-up.")
     else:
         st.info("Missing columns in history to compute accountability.")
+
+# ---------------------------------------------------------------------------
+# 📋 MY QA PAGE
+# ---------------------------------------------------------------------------
+_QA_SHEET_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1Dt7D2nJLmmWyVc39Vss-2nySewiC3pcObRHPDxQ4ads"
+    "/export?format=csv&gid=1150892893"
+)
+
+_QA_RUBRIC_COLS = {
+    "Greeting/Closing":     "Call Flow - 10 Pts [Greeting/Closing]",
+    "Acknowledgement":      "Call Flow - 10 Pts [Acknowledgement]",
+    "Intro Probing":        "Call Flow - 10 Pts [Intro Probing]",
+    "Address Verification": "Call Flow - 10 Pts [Address Verification]",
+    "Protocol":             "Call Flow - 10 Pts [Protocol]",
+    "Rapport":              "Communication - 25 [Rapport]",
+    "Professionalism":      "Communication - 25 [Professionalism]",
+    "Presentation":         "Communication - 25 [Presentation]",
+    "Dead Air":             "Communication - 25 [Dead Air]",
+    "3 Cut Minimum":        "Policy - 25 Pts [3 Cut Minimum]",
+    "Long Grass Fee":       "Policy - 25 Pts [Long Grass Fee]",
+    "48 Hour Policy":       "Policy - 25 Pts [48 Hour Policy]",
+    "Proper Rebuttal":      "Handling Objections (Loss Only) - 20 [Proper Rebuttal]",
+    "Address Accuracy":     "Admin Setup (Win Only) - 20 Pts [Address Accuracy]",
+    "Contact Info":         "Admin Setup (Win Only) - 20 Pts [Contact Info]",
+    "Service Set Up":       "Admin Setup (Win Only) - 20 Pts [Service Set Up]",
+    "Customer Name":        "Admin Setup (Win Only) - 20 Pts [Customer Name]",
+}
+
+_QA_DISPLAY_COLS = [
+    "Timestamp", "Scoring Week", "Call ID", "Team Lead", "Type", "Win/Loss",
+    "Call Flow Score", "Call Flow Comments",
+    "Communication Score", "Communication Comments",
+    "Policy Score", "Policy Comments",
+    "Objections Score", "Objections Comments",
+    "Sales Score", "Sales Comments",
+    "Setup Score", "Setup Comments",
+    "QA Observation", "Overall Experience", "Overall Experience Comments",
+    "Critical Deductions", "Critical Comments",
+    "New Score",
+]
+
+@st.cache_data(show_spinner=False, ttl=300)
+def load_qa_data(_cache_bust_key: str) -> pd.DataFrame:
+    try:
+        df = pd.read_csv(_QA_SHEET_URL, header=0)
+        df.columns = [re.sub(r'\s+', ' ', c).strip() for c in df.columns]
+        df['_ts'] = pd.to_datetime(df['Timestamp'], errors='coerce')
+        for col in ['New Score', 'Score', 'Old Score']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+if page == "📋 My QA":
+    _cache_bust = datetime.now(pytz.timezone('US/Eastern')).strftime("%Y-%m-%d-%H")
+
+    with st.spinner("Loading QA data..."):
+        _qa_raw = load_qa_data(_cache_bust)
+
+    if _qa_raw.empty:
+        st.warning("QA data unavailable — please try again shortly.")
+        st.stop()
+
+    # Build viewed rep's full name for matching against Agent column
+    _vr = roster_auth[roster_auth['rep_key'] == viewed_email]
+    if not _vr.empty:
+        _vfn = _safe(_vr['First_Name'].values[0])
+        _vln = _safe(_vr['Last_Name'].values[0])
+        _viewed_full = f"{_vfn} {_vln}".strip()
+    else:
+        _parts = viewed_email.split('@')[0].split('.')
+        _viewed_full = ' '.join(p.title() for p in _parts)
+
+    if 'Agent' not in _qa_raw.columns:
+        st.error("Unexpected QA sheet format — 'Agent' column not found.")
+        st.stop()
+
+    _agent_df = _qa_raw[
+        _qa_raw['Agent'].str.strip().str.lower() == _viewed_full.lower()
+    ].copy()
+    _agent_df = _agent_df.drop(columns=['Email Address'], errors='ignore')
+
+    st.header(f"📋 QA Feedback — {_viewed_full}")
+
+    if _agent_df.empty:
+        st.info(f"No QA observations found for **{_viewed_full}**.")
+        st.stop()
+
+    st.caption(f"{len(_agent_df)} total observations on record")
+
+    # Month selector
+    _agent_df['_month'] = _agent_df['_ts'].dt.to_period('M')
+    _avail = sorted(_agent_df['_month'].dropna().unique(), reverse=True)
+    if not _avail:
+        st.warning("No dated observations found.")
+        st.stop()
+
+    _sel_month_str = st.selectbox(
+        "📅 Select month",
+        [str(m) for m in _avail],
+        key="qa_month_select",
+    )
+    _sel_period = pd.Period(_sel_month_str, freq='M')
+    _month_df = _agent_df[_agent_df['_month'] == _sel_period].copy()
+
+    _score_col = 'New Score' if 'New Score' in _agent_df.columns else 'Score'
+
+    # ── Score summary cards ──────────────────────────────────────────────────
+    _m_avg  = _month_df[_score_col].dropna().mean()
+    _h1     = _month_df[_month_df['_ts'].dt.day <= 15][_score_col].dropna()
+    _h2     = _month_df[_month_df['_ts'].dt.day > 15][_score_col].dropna()
+
+    _c1, _c2, _c3 = st.columns(3)
+    _c1.metric("Monthly QA Avg",  f"{_m_avg:.1f}%" if not pd.isna(_m_avg) else "—")
+    _c2.metric("1st–15th Avg",    f"{_h1.mean():.1f}%" if len(_h1) > 0 else "—",
+               help="PIP EOR first-half period")
+    _c3.metric("16th–End Avg",    f"{_h2.mean():.1f}%" if len(_h2) > 0 else "—",
+               help="PIP EOR second-half period")
+
+    # ── 3-month bi-monthly breakdown ────────────────────────────────────────
+    st.subheader("📊 QA Score Breakdown — Last 3 Months")
+    _recent_3 = sorted(_avail, reverse=True)[:3]
+    _breakdown_rows = []
+    for _p in _recent_3:
+        _md = _agent_df[_agent_df['_month'] == _p]
+        _bh1 = _md[_md['_ts'].dt.day <= 15][_score_col].dropna().mean()
+        _bh2 = _md[_md['_ts'].dt.day > 15][_score_col].dropna().mean()
+        _bma = _md[_score_col].dropna().mean()
+        _breakdown_rows.append({
+            "Month":         str(_p),
+            "1st–15th Avg":  f"{_bh1:.1f}%" if not pd.isna(_bh1) else "—",
+            "16th–End Avg":  f"{_bh2:.1f}%" if not pd.isna(_bh2) else "—",
+            "Monthly Avg":   f"{_bma:.1f}%" if not pd.isna(_bma) else "—",
+        })
+    st.dataframe(pd.DataFrame(_breakdown_rows), use_container_width=True, hide_index=True)
+
+    # ── Kudos & improvement (all available data) ─────────────────────────────
+    st.subheader("🌟 Strengths & Opportunities")
+    st.caption("Based on all observations on record — minimum 5 applicable calls required per area.")
+
+    _kudos, _improve = [], []
+    for _label, _raw_col in _QA_RUBRIC_COLS.items():
+        _norm_col = re.sub(r'\s+', ' ', _raw_col).strip()
+        if _norm_col not in _agent_df.columns:
+            continue
+        _vals = _agent_df[_norm_col].astype(str).str.strip().str.lower()
+        _applicable = _vals[_vals.isin(['yes', 'no'])]
+        if len(_applicable) < 5:
+            continue
+        _rate = (_applicable == 'yes').sum() / len(_applicable)
+        if _rate >= 0.90:
+            _kudos.append((_label, _rate))
+        elif _rate <= 0.70:
+            _improve.append((_label, _rate))
+
+    _kc, _ic = st.columns(2)
+    with _kc:
+        st.markdown("**🏆 Consistently Crushing**")
+        if _kudos:
+            for _lbl, _r in sorted(_kudos, key=lambda x: -x[1]):
+                st.success(f"✅ {_lbl} — {_r*100:.0f}%")
+        else:
+            st.caption("Not enough data yet to identify top strengths.")
+    with _ic:
+        st.markdown("**💡 Opportunities to Improve**")
+        if _improve:
+            for _lbl, _r in sorted(_improve, key=lambda x: x[1]):
+                st.warning(f"⚠️ {_lbl} — {_r*100:.0f}%")
+        else:
+            st.caption("No consistent gaps identified — keep it up!")
+
+    # ── Observations detail table ────────────────────────────────────────────
+    st.subheader(f"📝 Observations — {_sel_month_str}")
+    st.caption(f"{len(_month_df)} observation(s) this month")
+
+    _show_cols = [c for c in _QA_DISPLAY_COLS if c in _month_df.columns]
+    _show_df = _month_df[_show_cols].sort_values('Timestamp', ascending=False) \
+        if 'Timestamp' in _show_cols else _month_df[_show_cols]
+    st.dataframe(_show_df, use_container_width=True, hide_index=True)
 
 
