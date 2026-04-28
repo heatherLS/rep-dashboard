@@ -3735,8 +3735,8 @@ def _get_coaching_tip(_cache_key: str, rubric_label: str, comments: tuple) -> st
             }],
         )
         return _msg.content[0].text.strip()
-    except Exception:
-        return ""
+    except Exception as _e:
+        return f"[error: {_e}]"
 
 _QA_RUBRIC_COLS = {
     "Greeting/Closing":     "Call Flow - 10 Pts [Greeting/Closing]",
@@ -3770,6 +3770,28 @@ _QA_DISPLAY_COLS = [
     "Critical Deductions", "Critical Comments",
     "New Score",
 ]
+
+_TEAMS_NEW_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1sO4ZDe-n8-ugc-OsoDisHPXXEAap6b2iINcjsWXz5gU"
+    "/export?format=csv&gid=4048477"
+)
+
+@st.cache_data(show_spinner=False, ttl=300)
+def load_teams_new_names(_cache_bust_key: str) -> dict:
+    try:
+        _tn = pd.read_csv(_TEAMS_NEW_URL, header=0)
+        _tn.columns = _tn.columns.str.strip()
+        _lookup = {}
+        for _, _r in _tn.iterrows():
+            _fn = str(_r.get('First_Name', '')).strip()
+            _ln = str(_r.get('Last_Name', '')).strip()
+            _agent = str(_r.get('Agent', '')).strip()
+            if _fn and _ln and _agent:
+                _lookup[f"{_fn} {_ln}".lower()] = _agent
+        return _lookup
+    except Exception:
+        return {}
 
 @st.cache_data(show_spinner=False, ttl=300)
 def load_qa_data(_cache_bust_key: str) -> tuple:
@@ -3814,15 +3836,17 @@ if page == "📋 My QA":
             st.error(f"Error: {_qa_err}")
         st.stop()
 
-    # Build viewed rep's full name for matching against Agent column
+    # Build viewed rep's full name using Teams New as source of truth
+    _teams_names = load_teams_new_names(_cache_bust)
     _vr = roster_auth[roster_auth['rep_key'] == viewed_email]
     if not _vr.empty:
         _vfn = _safe(_vr['First_Name'].values[0])
         _vln = _safe(_vr['Last_Name'].values[0])
-        _viewed_full = f"{_vfn} {_vln}".strip()
+        _roster_name = f"{_vfn} {_vln}".strip()
     else:
         _parts = viewed_email.split('@')[0].split('.')
-        _viewed_full = ' '.join(p.title() for p in _parts)
+        _roster_name = ' '.join(p.title() for p in _parts)
+    _viewed_full = _teams_names.get(_roster_name.lower(), _roster_name)
 
     if 'Agent' not in _qa_raw.columns:
         st.error("Unexpected QA sheet format — 'Agent' column not found.")
@@ -3942,6 +3966,8 @@ if page == "📋 My QA":
                             _tip = _get_coaching_tip(_tip_key, _lbl, _comments)
                         if _tip:
                             st.info(f"💬 **Coach:** {_tip}")
+                        else:
+                            st.caption("⏳ Coaching tip unavailable — check that ANTHROPIC_API_KEY is set in secrets.")
         else:
             st.caption("No consistent gaps identified — keep it up!")
 
