@@ -3683,11 +3683,8 @@ if page == "Senior Manager View":
 # ---------------------------------------------------------------------------
 # 📋 MY QA PAGE
 # ---------------------------------------------------------------------------
-_QA_SHEET_URL = (
-    "https://docs.google.com/spreadsheets/d/"
-    "1Dt7D2nJLmmWyVc39Vss-2nySewiC3pcObRHPDxQ4ads"
-    "/export?format=csv&gid=1150892893"
-)
+_QA_SHEET_ID = "1Dt7D2nJLmmWyVc39Vss-2nySewiC3pcObRHPDxQ4ads"
+_QA_SHEET_TAB  = "Sales"
 
 _QA_RUBRIC_COLS = {
     "Greeting/Closing":     "Call Flow - 10 Pts [Greeting/Closing]",
@@ -3723,26 +3720,46 @@ _QA_DISPLAY_COLS = [
 ]
 
 @st.cache_data(show_spinner=False, ttl=300)
-def load_qa_data(_cache_bust_key: str) -> pd.DataFrame:
+def load_qa_data(_cache_bust_key: str) -> tuple:
     try:
-        df = pd.read_csv(_QA_SHEET_URL, header=0)
+        from google.oauth2.service_account import Credentials as SACredentials
+        from googleapiclient.discovery import build as gapi_build
+
+        _sa = dict(st.secrets["gcp_service_account"])
+        _creds = SACredentials.from_service_account_info(
+            _sa,
+            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
+        )
+        _svc = gapi_build("sheets", "v4", credentials=_creds, cache_discovery=False)
+        _result = _svc.spreadsheets().values().get(
+            spreadsheetId=_QA_SHEET_ID,
+            range=_QA_SHEET_TAB,
+        ).execute()
+        _values = _result.get("values", [])
+        if len(_values) < 2:
+            return pd.DataFrame(), "Sheet returned no data rows"
+        _headers = _values[0]
+        _rows = [r + [""] * (len(_headers) - len(r)) for r in _values[1:]]
+        df = pd.DataFrame(_rows, columns=_headers)
         df.columns = [re.sub(r'\s+', ' ', c).strip() for c in df.columns]
         df['_ts'] = pd.to_datetime(df['Timestamp'], errors='coerce')
         for col in ['New Score', 'Score', 'Old Score']:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
-        return df
-    except Exception:
-        return pd.DataFrame()
+        return df, None
+    except Exception as e:
+        return pd.DataFrame(), str(e)
 
 if page == "📋 My QA":
     _cache_bust = datetime.now(eastern).strftime("%Y-%m-%d-%H")
 
     with st.spinner("Loading QA data..."):
-        _qa_raw = load_qa_data(_cache_bust)
+        _qa_raw, _qa_err = load_qa_data(_cache_bust)
 
     if _qa_raw.empty:
-        st.warning("QA data unavailable — please try again shortly.")
+        st.warning(f"QA data unavailable — please try again shortly.")
+        if _qa_err:
+            st.error(f"Error: {_qa_err}")
         st.stop()
 
     # Build viewed rep's full name for matching against Agent column
