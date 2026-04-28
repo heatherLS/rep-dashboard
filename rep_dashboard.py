@@ -3736,7 +3736,7 @@ def load_qa_data(_cache_bust_key: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 if page == "📋 My QA":
-    _cache_bust = datetime.now(pytz.timezone('US/Eastern')).strftime("%Y-%m-%d-%H")
+    _cache_bust = datetime.now(eastern).strftime("%Y-%m-%d-%H")
 
     with st.spinner("Loading QA data..."):
         _qa_raw = load_qa_data(_cache_bust)
