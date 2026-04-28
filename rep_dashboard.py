@@ -3683,8 +3683,60 @@ if page == "Senior Manager View":
 # ---------------------------------------------------------------------------
 # 📋 MY QA PAGE
 # ---------------------------------------------------------------------------
-_QA_SHEET_ID = "1Dt7D2nJLmmWyVc39Vss-2nySewiC3pcObRHPDxQ4ads"
-_QA_SHEET_TAB  = "Sales"
+_QA_SHEET_ID  = "1Dt7D2nJLmmWyVc39Vss-2nySewiC3pcObRHPDxQ4ads"
+_QA_SHEET_TAB = "Sales"
+
+_QA_RUBRIC_TO_COMMENT = {
+    "Greeting/Closing":     "Call Flow Comments",
+    "Acknowledgement":      "Call Flow Comments",
+    "Intro Probing":        "Call Flow Comments",
+    "Address Verification": "Call Flow Comments",
+    "Protocol":             "Call Flow Comments",
+    "Rapport":              "Communication Comments",
+    "Professionalism":      "Communication Comments",
+    "Presentation":         "Communication Comments",
+    "Dead Air":             "Communication Comments",
+    "3 Cut Minimum":        "Policy Comments",
+    "Long Grass Fee":       "Policy Comments",
+    "48 Hour Policy":       "Policy Comments",
+    "Proper Rebuttal":      "Objections Comments",
+    "Address Accuracy":     "Setup Comments",
+    "Contact Info":         "Setup Comments",
+    "Service Set Up":       "Setup Comments",
+    "Customer Name":        "Setup Comments",
+}
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def _get_coaching_tip(_cache_key: str, rubric_label: str, comments: tuple) -> str:
+    try:
+        import anthropic as _anthropic
+        _comment_lines = "\n".join(f"- {c}" for c in comments if str(c).strip() not in ("", "nan"))
+        if not _comment_lines:
+            return ""
+        _client = _anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+        _msg = _client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=220,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"You are a high-performance sales coach for LawnStarter, a residential lawn care company. "
+                    f"A sales rep is consistently missing the \"{rubric_label}\" rubric item on QA evaluations.\n\n"
+                    f"QA comments from their failed observations:\n{_comment_lines}\n\n"
+                    f"Write 2-3 sentences of direct coaching. Requirements:\n"
+                    f"- Open by acknowledging what they're already doing in the right direction — never start negative\n"
+                    f"- Then pivot to the ONE specific thing that will take them to the next level on this item\n"
+                    f"- Assumptive selling frame: the sale is already happening — coach on HOW to close, never IF\n"
+                    f"- Pull specific patterns from the comments above, don't be generic\n"
+                    f"- Give at least one concrete example phrase or technique they can use on their very next call\n"
+                    f"- Tone: encouraging and motivating, like a coach who genuinely believes in them and wants them to win\n"
+                    f"No bullet points. One coaching paragraph only."
+                ),
+            }],
+        )
+        return _msg.content[0].text.strip()
+    except Exception:
+        return ""
 
 _QA_RUBRIC_COLS = {
     "Greeting/Closing":     "Call Flow - 10 Pts [Greeting/Closing]",
@@ -3867,6 +3919,29 @@ if page == "📋 My QA":
         if _improve:
             for _lbl, _r in sorted(_improve, key=lambda x: x[1]):
                 st.warning(f"⚠️ {_lbl} — {_r*100:.0f}%")
+                _comment_col = _QA_RUBRIC_TO_COMMENT.get(_lbl)
+                _norm_comment_col = re.sub(r'\s+', ' ', _comment_col).strip() if _comment_col else None
+                if _norm_comment_col and _norm_comment_col in _agent_df.columns:
+                    _raw_col = _QA_RUBRIC_COLS[_lbl]
+                    _norm_rubric_col = re.sub(r'\s+', ' ', _raw_col).strip()
+                    _failed_rows = _agent_df[
+                        _agent_df[_norm_rubric_col].astype(str).str.strip().str.lower() == 'no'
+                    ] if _norm_rubric_col in _agent_df.columns else _agent_df
+                    _comments = tuple(
+                        _failed_rows[_norm_comment_col]
+                        .dropna()
+                        .astype(str)
+                        .str.strip()
+                        .loc[lambda s: s.str.lower() != 'nan']
+                        .unique()
+                        .tolist()
+                    )
+                    if _comments:
+                        _tip_key = f"{_viewed_full}|{_lbl}|{hash(_comments)}"
+                        with st.spinner(f"Getting coaching tip for {_lbl}..."):
+                            _tip = _get_coaching_tip(_tip_key, _lbl, _comments)
+                        if _tip:
+                            st.info(f"💬 **Coach:** {_tip}")
         else:
             st.caption("No consistent gaps identified — keep it up!")
 
@@ -3877,6 +3952,23 @@ if page == "📋 My QA":
     _show_cols = [c for c in _QA_DISPLAY_COLS if c in _month_df.columns]
     _show_df = _month_df[_show_cols].sort_values('Timestamp', ascending=False) \
         if 'Timestamp' in _show_cols else _month_df[_show_cols]
-    st.dataframe(_show_df, use_container_width=True, hide_index=True)
+
+    _comment_cols = {c for c in _show_cols if 'comment' in c.lower() or 'observation' in c.lower()}
+    _col_config = {c: st.column_config.TextColumn(c, width="large") for c in _comment_cols}
+    st.dataframe(
+        _show_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config=_col_config,
+        height=min(400 + len(_show_df) * 35, 900),
+    )
+    st.markdown(
+        """
+        <style>
+        [data-testid="stDataFrame"] td { white-space: pre-wrap !important; word-break: break-word !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
