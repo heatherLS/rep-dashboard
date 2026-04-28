@@ -3953,21 +3953,29 @@ if page == "📋 My QA":
     _show_df = _month_df[_show_cols].sort_values('Timestamp', ascending=False) \
         if 'Timestamp' in _show_cols else _month_df[_show_cols]
 
-    _comment_cols = {c for c in _show_cols if 'comment' in c.lower() or 'observation' in c.lower()}
-    _col_config = {c: st.column_config.TextColumn(c, width="large") for c in _comment_cols}
-    st.dataframe(
-        _show_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config=_col_config,
-        height=min(400 + len(_show_df) * 35, 900),
+    _comment_col_set = {c for c in _show_cols if 'comment' in c.lower() or 'observation' in c.lower()}
+
+    _tbl_rows = ""
+    for _, _row in _show_df.iterrows():
+        _tbl_rows += "<tr>"
+        for _c in _show_cols:
+            _v = "" if pd.isna(_row[_c]) or str(_row[_c]).lower() == "nan" else str(_row[_c])
+            if _c in _comment_col_set:
+                _tbl_rows += f'<td style="padding:8px 10px;border:1px solid #444;white-space:pre-wrap;word-break:break-word;min-width:180px;max-width:320px;vertical-align:top;">{_v}</td>'
+            else:
+                _tbl_rows += f'<td style="padding:8px 10px;border:1px solid #444;white-space:nowrap;vertical-align:top;">{_v}</td>'
+        _tbl_rows += "</tr>"
+
+    _tbl_headers = "".join(
+        f'<th style="padding:8px 10px;border:1px solid #555;background:#1e1e2e;text-align:left;white-space:nowrap;">{_c}</th>'
+        for _c in _show_cols
     )
     st.markdown(
-        """
-        <style>
-        [data-testid="stDataFrame"] td { white-space: pre-wrap !important; word-break: break-word !important; }
-        </style>
-        """,
+        f'<div style="overflow-x:auto;font-size:13px;">'
+        f'<table style="border-collapse:collapse;width:100%;">'
+        f'<thead><tr>{_tbl_headers}</tr></thead>'
+        f'<tbody>{_tbl_rows}</tbody>'
+        f'</table></div>',
         unsafe_allow_html=True,
     )
 
