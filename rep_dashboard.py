@@ -927,6 +927,48 @@ def render_pool_splash_banners(df: pd.DataFrame):
         )
 
 
+# ---------------------------------------------------------------------------
+# ORG CHART HELPER — authoritative rep→TL assignment
+# ---------------------------------------------------------------------------
+_ORG_CHART_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1T93rqMI7-oA3ViAjIdY5bjHLR5hssewSaPuuknpwUkQ"
+    "/export?format=csv&gid=0"
+)
+
+@st.cache_data(show_spinner=False, ttl=600)
+def load_org_chart_assignments(_cache_bust_key: str) -> dict:
+    """Returns {rep_name_lower: tl_name_lower}, both in 'first last' format."""
+    try:
+        _df = pd.read_csv(_ORG_CHART_URL, header=None, dtype=str).fillna("")
+        _tl_cols = {}
+        _header_row_idx = None
+        for _ri, _row in _df.iterrows():
+            for _ci, _val in enumerate(_row):
+                if "sales manager -" in str(_val).lower():
+                    _tl_name = str(_val).split("-", 1)[1].strip().lower()
+                    _tl_cols[_ci] = _tl_name
+                    _header_row_idx = _ri
+        if not _tl_cols or _header_row_idx is None:
+            return {}
+        _assignments = {}
+        for _ri in range(_header_row_idx + 3, len(_df)):  # skip T2 row + count row
+            _row = _df.iloc[_ri]
+            for _ci, _tl in _tl_cols.items():
+                _name = str(_row.iloc[_ci]).strip() if _ci < len(_row) else ""
+                if _name and _name.lower() not in ("nan", ""):
+                    _assignments[_name.lower()] = _tl
+        return _assignments
+    except Exception:
+        return {}
+
+def _tl_key_to_first_last(tl_key: str) -> str:
+    """'Lapuz, Mona' → 'mona lapuz' for org chart matching."""
+    parts = tl_key.split(',', 1)
+    if len(parts) == 2:
+        return f"{parts[1].strip()} {parts[0].strip()}".lower()
+    return tl_key.lower()
+
 if page == "📊 Leaderboard":
     st.markdown("<h1 style='text-align: center;'>📊 Conversion Rate Leaderboard</h1>", unsafe_allow_html=True)
 
@@ -2675,48 +2717,6 @@ if page == "📅 Yesterday":
     </style>
     """, unsafe_allow_html=True)
 
-
-# ---------------------------------------------------------------------------
-# ORG CHART HELPER — authoritative rep→TL assignment
-# ---------------------------------------------------------------------------
-_ORG_CHART_URL = (
-    "https://docs.google.com/spreadsheets/d/"
-    "1T93rqMI7-oA3ViAjIdY5bjHLR5hssewSaPuuknpwUkQ"
-    "/export?format=csv&gid=0"
-)
-
-@st.cache_data(show_spinner=False, ttl=600)
-def load_org_chart_assignments(_cache_bust_key: str) -> dict:
-    """Returns {rep_name_lower: tl_name_lower}, both in 'first last' format."""
-    try:
-        _df = pd.read_csv(_ORG_CHART_URL, header=None, dtype=str).fillna("")
-        _tl_cols = {}
-        _header_row_idx = None
-        for _ri, _row in _df.iterrows():
-            for _ci, _val in enumerate(_row):
-                if "sales manager -" in str(_val).lower():
-                    _tl_name = str(_val).split("-", 1)[1].strip().lower()
-                    _tl_cols[_ci] = _tl_name
-                    _header_row_idx = _ri
-        if not _tl_cols or _header_row_idx is None:
-            return {}
-        _assignments = {}
-        for _ri in range(_header_row_idx + 3, len(_df)):  # skip T2 row + count row
-            _row = _df.iloc[_ri]
-            for _ci, _tl in _tl_cols.items():
-                _name = str(_row.iloc[_ci]).strip() if _ci < len(_row) else ""
-                if _name and _name.lower() not in ("nan", ""):
-                    _assignments[_name.lower()] = _tl
-        return _assignments
-    except Exception:
-        return {}
-
-def _tl_key_to_first_last(tl_key: str) -> str:
-    """'Lapuz, Mona' → 'mona lapuz' for org chart matching."""
-    parts = tl_key.split(',', 1)
-    if len(parts) == 2:
-        return f"{parts[1].strip()} {parts[0].strip()}".lower()
-    return tl_key.lower()
 
 # ---------------------------------------------------------------------------
 # QA HELPERS (used by Team Lead Dashboard and My QA page)
