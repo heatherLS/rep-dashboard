@@ -3817,6 +3817,7 @@ def load_qa_data(_cache_bust_key: str) -> tuple:
         df = pd.DataFrame(_rows, columns=_headers)
         df.columns = [re.sub(r'\s+', ' ', c).strip() for c in df.columns]
         df['_ts'] = pd.to_datetime(df['Timestamp'], errors='coerce')
+        df['_scoring_week'] = pd.to_datetime(df['Scoring Week'], errors='coerce')
         for col in ['New Score', 'Score', 'Old Score']:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -3866,7 +3867,7 @@ if page == "📋 My QA":
     st.caption(f"{len(_agent_df)} total observations on record")
 
     # Month selector
-    _agent_df['_month'] = _agent_df['_ts'].dt.to_period('M')
+    _agent_df['_month'] = _agent_df['_scoring_week'].dt.to_period('M')
     _avail = sorted(_agent_df['_month'].dropna().unique(), reverse=True)
     if not _avail:
         st.warning("No dated observations found.")
@@ -3884,8 +3885,8 @@ if page == "📋 My QA":
 
     # ── Score summary cards ──────────────────────────────────────────────────
     _m_avg  = _month_df[_score_col].dropna().mean()
-    _h1     = _month_df[_month_df['_ts'].dt.day <= 15][_score_col].dropna()
-    _h2     = _month_df[_month_df['_ts'].dt.day > 15][_score_col].dropna()
+    _h1     = _month_df[_month_df['_scoring_week'].dt.day <= 15][_score_col].dropna()
+    _h2     = _month_df[_month_df['_scoring_week'].dt.day > 15][_score_col].dropna()
 
     _c1, _c2, _c3 = st.columns(3)
     _c1.metric("Monthly QA Avg",  f"{_m_avg:.1f}%" if not pd.isna(_m_avg) else "—")
@@ -3900,8 +3901,8 @@ if page == "📋 My QA":
     _breakdown_rows = []
     for _p in _recent_3:
         _md = _agent_df[_agent_df['_month'] == _p]
-        _bh1 = _md[_md['_ts'].dt.day <= 15][_score_col].dropna().mean()
-        _bh2 = _md[_md['_ts'].dt.day > 15][_score_col].dropna().mean()
+        _bh1 = _md[_md['_scoring_week'].dt.day <= 15][_score_col].dropna().mean()
+        _bh2 = _md[_md['_scoring_week'].dt.day > 15][_score_col].dropna().mean()
         _bma = _md[_score_col].dropna().mean()
         _breakdown_rows.append({
             "Month":         str(_p),
