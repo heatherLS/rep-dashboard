@@ -940,6 +940,26 @@ if page == "📊 Leaderboard":
     # 🧹 Clean headers and strip spaces
     df.columns = df.columns.str.strip()
 
+    # Resolve correct team name via org chart (fixes "Team ABC" new hires showing wrong logo)
+    _lb_org = load_org_chart_assignments(cache_bust_key)
+    if _lb_org and 'Full_Name' in df.columns and 'Team Name' in df.columns:
+        # Build tl_lower → team_name from reps that already have correct assignments
+        _lb_tl_to_team = {}
+        for _, _r in df.iterrows():
+            _tn = str(_r.get('Team Name', '')).strip()
+            _fn = str(_r.get('Full_Name', '')).strip().lower()
+            if _tn.lower() not in ('team abc', '', 'nan') and _fn in _lb_org:
+                _lb_tl_to_team[_lb_org[_fn]] = _tn
+        def _resolve_lb_team(row):
+            _tn = str(row.get('Team Name', '')).strip()
+            if _tn.lower() in ('team abc', '', 'nan'):
+                _fn = str(row.get('Full_Name', '')).strip().lower()
+                _tl = _lb_org.get(_fn)
+                if _tl and _tl in _lb_tl_to_team:
+                    return _lb_tl_to_team[_tl]
+            return _tn
+        df['Team Name'] = df.apply(_resolve_lb_team, axis=1)
+
     # Pull fresh history for records/champions
     history_df = load_history(cache_bust_key).copy()
     history_df.columns = history_df.columns.str.strip()
@@ -1680,10 +1700,8 @@ if page == "📊 Leaderboard":
         df['Team_Logo'] = df['Team Name'].apply(
             lambda name: f"<img src='https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{name.replace(' ', '_').lower()}.png' width='40'>" if pd.notna(name) else ""
         )
-        # Deduplicate logo lookup — one row per rep, preferring non-Team ABC
-        _logo = df[['Full_Name', 'Team Name', 'Team_Logo']].copy()
-        _logo['_is_abc'] = _logo['Team Name'].astype(str).str.strip().str.lower() == 'team abc'
-        _logo = _logo.sort_values('_is_abc').drop_duplicates(subset='Full_Name', keep='first')[['Full_Name', 'Team_Logo']]
+        # Deduplicate logo lookup — one row per rep
+        _logo = df[['Full_Name', 'Team_Logo']].drop_duplicates(subset='Full_Name', keep='first')
         leaderboard = leaderboard.merge(_logo, on='Full_Name', how='left')
         leaderboard_display = leaderboard[['Rank', 'Full_Name', conversion_col, 'Team_Logo']].copy()
         leaderboard_display.columns = ['Rank', 'Rep Name', 'Conversion (%)', 'Team Logo']
