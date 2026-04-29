@@ -2658,6 +2658,158 @@ if page == "📅 Yesterday":
     """, unsafe_allow_html=True)
 
 
+# ---------------------------------------------------------------------------
+# QA HELPERS (used by Team Lead Dashboard and My QA page)
+# ---------------------------------------------------------------------------
+_QA_SHEET_ID  = "1Dt7D2nJLmmWyVc39Vss-2nySewiC3pcObRHPDxQ4ads"
+_QA_SHEET_TAB = "Sales"
+
+_QA_RUBRIC_TO_COMMENT = {
+    "Greeting/Closing":     "Call Flow Comments",
+    "Acknowledgement":      "Call Flow Comments",
+    "Intro Probing":        "Call Flow Comments",
+    "Address Verification": "Call Flow Comments",
+    "Protocol":             "Call Flow Comments",
+    "Rapport":              "Communication Comments",
+    "Professionalism":      "Communication Comments",
+    "Presentation":         "Communication Comments",
+    "Dead Air":             "Communication Comments",
+    "3 Cut Minimum":        "Policy Comments",
+    "Long Grass Fee":       "Policy Comments",
+    "48 Hour Policy":       "Policy Comments",
+    "Proper Rebuttal":      "Objections Comments",
+    "Address Accuracy":     "Setup Comments",
+    "Contact Info":         "Setup Comments",
+    "Service Set Up":       "Setup Comments",
+    "Customer Name":        "Setup Comments",
+}
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def _get_coaching_tip(_cache_key: str, rubric_label: str, comments: tuple) -> str:
+    try:
+        import anthropic as _anthropic
+        _comment_lines = "\n".join(f"- {c}" for c in comments if str(c).strip() not in ("", "nan"))
+        if not _comment_lines:
+            return ""
+        _api_key = (
+            st.secrets.get("ANTHROPIC_API_KEY")
+            or st.secrets.get("anthropic", {}).get("ANTHROPIC_API_KEY")
+            or st.secrets.get("gmail", {}).get("ANTHROPIC_API_KEY")
+        )
+        if not _api_key:
+            return "[error: ANTHROPIC_API_KEY not found in secrets — add it at the TOP of secrets.toml, before any [section] headers]"
+        _client = _anthropic.Anthropic(api_key=_api_key)
+        _msg = _client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=220,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"You are a high-performance sales coach for LawnStarter, a residential lawn care company. "
+                    f"A sales rep is consistently missing the \"{rubric_label}\" rubric item on QA evaluations.\n\n"
+                    f"QA comments from their failed observations:\n{_comment_lines}\n\n"
+                    f"Write 2-3 sentences of direct coaching. Requirements:\n"
+                    f"- Open by acknowledging what they're already doing in the right direction — never start negative\n"
+                    f"- Then pivot to the ONE specific thing that will take them to the next level on this item\n"
+                    f"- Assumptive selling frame: the sale is already happening — coach on HOW to close, never IF\n"
+                    f"- Pull specific patterns from the comments above, don't be generic\n"
+                    f"- Give at least one concrete example phrase or technique they can use on their very next call\n"
+                    f"- Tone: encouraging and motivating, like a coach who genuinely believes in them and wants them to win\n"
+                    f"No bullet points. One coaching paragraph only."
+                ),
+            }],
+        )
+        return _msg.content[0].text.strip()
+    except Exception as _e:
+        return f"[error: {_e}]"
+
+_QA_RUBRIC_COLS = {
+    "Greeting/Closing":     "Call Flow - 10 Pts [Greeting/Closing]",
+    "Acknowledgement":      "Call Flow - 10 Pts [Acknowledgement]",
+    "Intro Probing":        "Call Flow - 10 Pts [Intro Probing]",
+    "Address Verification": "Call Flow - 10 Pts [Address Verification]",
+    "Protocol":             "Call Flow - 10 Pts [Protocol]",
+    "Rapport":              "Communication - 25 [Rapport]",
+    "Professionalism":      "Communication - 25 [Professionalism]",
+    "Presentation":         "Communication - 25 [Presentation]",
+    "Dead Air":             "Communication - 25 [Dead Air]",
+    "3 Cut Minimum":        "Policy - 25 Pts [3 Cut Minimum]",
+    "Long Grass Fee":       "Policy - 25 Pts [Long Grass Fee]",
+    "48 Hour Policy":       "Policy - 25 Pts [48 Hour Policy]",
+    "Proper Rebuttal":      "Handling Objections (Loss Only) - 20 [Proper Rebuttal]",
+    "Address Accuracy":     "Admin Setup (Win Only) - 20 Pts [Address Accuracy]",
+    "Contact Info":         "Admin Setup (Win Only) - 20 Pts [Contact Info]",
+    "Service Set Up":       "Admin Setup (Win Only) - 20 Pts [Service Set Up]",
+    "Customer Name":        "Admin Setup (Win Only) - 20 Pts [Customer Name]",
+}
+
+_QA_DISPLAY_COLS = [
+    "Timestamp", "Scoring Week", "Call ID", "Team Lead", "Type", "Win/Loss",
+    "Call Flow Score", "Call Flow Comments",
+    "Communication Score", "Communication Comments",
+    "Policy Score", "Policy Comments",
+    "Objections Score", "Objections Comments",
+    "Sales Score", "Sales Comments",
+    "Setup Score", "Setup Comments",
+    "QA Observation", "Overall Experience", "Overall Experience Comments",
+    "Critical Deductions", "Critical Comments",
+    "New Score",
+]
+
+_TEAMS_NEW_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1sO4ZDe-n8-ugc-OsoDisHPXXEAap6b2iINcjsWXz5gU"
+    "/export?format=csv&gid=4048477"
+)
+
+@st.cache_data(show_spinner=False, ttl=300)
+def load_teams_new_names(_cache_bust_key: str) -> dict:
+    try:
+        _tn = pd.read_csv(_TEAMS_NEW_URL, header=0)
+        _tn.columns = _tn.columns.str.strip()
+        _lookup = {}
+        for _, _r in _tn.iterrows():
+            _fn = str(_r.get('First_Name', '')).strip()
+            _ln = str(_r.get('Last_Name', '')).strip()
+            _agent = str(_r.get('Agent', '')).strip()
+            if _fn and _ln and _agent:
+                _lookup[f"{_fn} {_ln}".lower()] = _agent
+        return _lookup
+    except Exception:
+        return {}
+
+@st.cache_data(show_spinner=False, ttl=300)
+def load_qa_data(_cache_bust_key: str) -> tuple:
+    try:
+        from google.oauth2.service_account import Credentials as SACredentials
+        from googleapiclient.discovery import build as gapi_build
+
+        _sa = dict(st.secrets["gcp_service_account"])
+        _creds = SACredentials.from_service_account_info(
+            _sa,
+            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
+        )
+        _svc = gapi_build("sheets", "v4", credentials=_creds, cache_discovery=False)
+        _result = _svc.spreadsheets().values().get(
+            spreadsheetId=_QA_SHEET_ID,
+            range=_QA_SHEET_TAB,
+        ).execute()
+        _values = _result.get("values", [])
+        if len(_values) < 2:
+            return pd.DataFrame(), "Sheet returned no data rows"
+        _headers = _values[0]
+        _rows = [r + [""] * (len(_headers) - len(r)) for r in _values[1:]]
+        df = pd.DataFrame(_rows, columns=_headers)
+        df.columns = [re.sub(r'\s+', ' ', c).strip() for c in df.columns]
+        df['_ts'] = pd.to_datetime(df['Timestamp'], errors='coerce')
+        df['_scoring_week'] = pd.to_datetime(df['Scoring Week'], errors='coerce')
+        for col in ['New Score', 'Score', 'Old Score']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        return df, None
+    except Exception as e:
+        return pd.DataFrame(), str(e)
+
 # 👩‍💻 TAB 5:  Team Lead Dashboard
 # --------------------------------------------
 
@@ -3774,154 +3926,6 @@ if page == "Senior Manager View":
 # ---------------------------------------------------------------------------
 # 📋 MY QA PAGE
 # ---------------------------------------------------------------------------
-_QA_SHEET_ID  = "1Dt7D2nJLmmWyVc39Vss-2nySewiC3pcObRHPDxQ4ads"
-_QA_SHEET_TAB = "Sales"
-
-_QA_RUBRIC_TO_COMMENT = {
-    "Greeting/Closing":     "Call Flow Comments",
-    "Acknowledgement":      "Call Flow Comments",
-    "Intro Probing":        "Call Flow Comments",
-    "Address Verification": "Call Flow Comments",
-    "Protocol":             "Call Flow Comments",
-    "Rapport":              "Communication Comments",
-    "Professionalism":      "Communication Comments",
-    "Presentation":         "Communication Comments",
-    "Dead Air":             "Communication Comments",
-    "3 Cut Minimum":        "Policy Comments",
-    "Long Grass Fee":       "Policy Comments",
-    "48 Hour Policy":       "Policy Comments",
-    "Proper Rebuttal":      "Objections Comments",
-    "Address Accuracy":     "Setup Comments",
-    "Contact Info":         "Setup Comments",
-    "Service Set Up":       "Setup Comments",
-    "Customer Name":        "Setup Comments",
-}
-
-@st.cache_data(show_spinner=False, ttl=3600)
-def _get_coaching_tip(_cache_key: str, rubric_label: str, comments: tuple) -> str:
-    try:
-        import anthropic as _anthropic
-        _comment_lines = "\n".join(f"- {c}" for c in comments if str(c).strip() not in ("", "nan"))
-        if not _comment_lines:
-            return ""
-        _api_key = (
-            st.secrets.get("ANTHROPIC_API_KEY")
-            or st.secrets.get("anthropic", {}).get("ANTHROPIC_API_KEY")
-            or st.secrets.get("gmail", {}).get("ANTHROPIC_API_KEY")
-        )
-        if not _api_key:
-            return "[error: ANTHROPIC_API_KEY not found in secrets — add it at the TOP of secrets.toml, before any [section] headers]"
-        _client = _anthropic.Anthropic(api_key=_api_key)
-        _msg = _client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=220,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"You are a high-performance sales coach for LawnStarter, a residential lawn care company. "
-                    f"A sales rep is consistently missing the \"{rubric_label}\" rubric item on QA evaluations.\n\n"
-                    f"QA comments from their failed observations:\n{_comment_lines}\n\n"
-                    f"Write 2-3 sentences of direct coaching. Requirements:\n"
-                    f"- Open by acknowledging what they're already doing in the right direction — never start negative\n"
-                    f"- Then pivot to the ONE specific thing that will take them to the next level on this item\n"
-                    f"- Assumptive selling frame: the sale is already happening — coach on HOW to close, never IF\n"
-                    f"- Pull specific patterns from the comments above, don't be generic\n"
-                    f"- Give at least one concrete example phrase or technique they can use on their very next call\n"
-                    f"- Tone: encouraging and motivating, like a coach who genuinely believes in them and wants them to win\n"
-                    f"No bullet points. One coaching paragraph only."
-                ),
-            }],
-        )
-        return _msg.content[0].text.strip()
-    except Exception as _e:
-        return f"[error: {_e}]"
-
-_QA_RUBRIC_COLS = {
-    "Greeting/Closing":     "Call Flow - 10 Pts [Greeting/Closing]",
-    "Acknowledgement":      "Call Flow - 10 Pts [Acknowledgement]",
-    "Intro Probing":        "Call Flow - 10 Pts [Intro Probing]",
-    "Address Verification": "Call Flow - 10 Pts [Address Verification]",
-    "Protocol":             "Call Flow - 10 Pts [Protocol]",
-    "Rapport":              "Communication - 25 [Rapport]",
-    "Professionalism":      "Communication - 25 [Professionalism]",
-    "Presentation":         "Communication - 25 [Presentation]",
-    "Dead Air":             "Communication - 25 [Dead Air]",
-    "3 Cut Minimum":        "Policy - 25 Pts [3 Cut Minimum]",
-    "Long Grass Fee":       "Policy - 25 Pts [Long Grass Fee]",
-    "48 Hour Policy":       "Policy - 25 Pts [48 Hour Policy]",
-    "Proper Rebuttal":      "Handling Objections (Loss Only) - 20 [Proper Rebuttal]",
-    "Address Accuracy":     "Admin Setup (Win Only) - 20 Pts [Address Accuracy]",
-    "Contact Info":         "Admin Setup (Win Only) - 20 Pts [Contact Info]",
-    "Service Set Up":       "Admin Setup (Win Only) - 20 Pts [Service Set Up]",
-    "Customer Name":        "Admin Setup (Win Only) - 20 Pts [Customer Name]",
-}
-
-_QA_DISPLAY_COLS = [
-    "Timestamp", "Scoring Week", "Call ID", "Team Lead", "Type", "Win/Loss",
-    "Call Flow Score", "Call Flow Comments",
-    "Communication Score", "Communication Comments",
-    "Policy Score", "Policy Comments",
-    "Objections Score", "Objections Comments",
-    "Sales Score", "Sales Comments",
-    "Setup Score", "Setup Comments",
-    "QA Observation", "Overall Experience", "Overall Experience Comments",
-    "Critical Deductions", "Critical Comments",
-    "New Score",
-]
-
-_TEAMS_NEW_URL = (
-    "https://docs.google.com/spreadsheets/d/"
-    "1sO4ZDe-n8-ugc-OsoDisHPXXEAap6b2iINcjsWXz5gU"
-    "/export?format=csv&gid=4048477"
-)
-
-@st.cache_data(show_spinner=False, ttl=300)
-def load_teams_new_names(_cache_bust_key: str) -> dict:
-    try:
-        _tn = pd.read_csv(_TEAMS_NEW_URL, header=0)
-        _tn.columns = _tn.columns.str.strip()
-        _lookup = {}
-        for _, _r in _tn.iterrows():
-            _fn = str(_r.get('First_Name', '')).strip()
-            _ln = str(_r.get('Last_Name', '')).strip()
-            _agent = str(_r.get('Agent', '')).strip()
-            if _fn and _ln and _agent:
-                _lookup[f"{_fn} {_ln}".lower()] = _agent
-        return _lookup
-    except Exception:
-        return {}
-
-@st.cache_data(show_spinner=False, ttl=300)
-def load_qa_data(_cache_bust_key: str) -> tuple:
-    try:
-        from google.oauth2.service_account import Credentials as SACredentials
-        from googleapiclient.discovery import build as gapi_build
-
-        _sa = dict(st.secrets["gcp_service_account"])
-        _creds = SACredentials.from_service_account_info(
-            _sa,
-            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
-        )
-        _svc = gapi_build("sheets", "v4", credentials=_creds, cache_discovery=False)
-        _result = _svc.spreadsheets().values().get(
-            spreadsheetId=_QA_SHEET_ID,
-            range=_QA_SHEET_TAB,
-        ).execute()
-        _values = _result.get("values", [])
-        if len(_values) < 2:
-            return pd.DataFrame(), "Sheet returned no data rows"
-        _headers = _values[0]
-        _rows = [r + [""] * (len(_headers) - len(r)) for r in _values[1:]]
-        df = pd.DataFrame(_rows, columns=_headers)
-        df.columns = [re.sub(r'\s+', ' ', c).strip() for c in df.columns]
-        df['_ts'] = pd.to_datetime(df['Timestamp'], errors='coerce')
-        df['_scoring_week'] = pd.to_datetime(df['Scoring Week'], errors='coerce')
-        for col in ['New Score', 'Score', 'Old Score']:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        return df, None
-    except Exception as e:
-        return pd.DataFrame(), str(e)
 
 if page == "📋 My QA":
     _cache_bust = datetime.now(eastern).strftime("%Y-%m-%d-%H")
