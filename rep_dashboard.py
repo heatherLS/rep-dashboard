@@ -3713,7 +3713,14 @@ def _get_coaching_tip(_cache_key: str, rubric_label: str, comments: tuple) -> st
         _comment_lines = "\n".join(f"- {c}" for c in comments if str(c).strip() not in ("", "nan"))
         if not _comment_lines:
             return ""
-        _client = _anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+        _api_key = (
+            st.secrets.get("ANTHROPIC_API_KEY")
+            or st.secrets.get("anthropic", {}).get("ANTHROPIC_API_KEY")
+            or st.secrets.get("gmail", {}).get("ANTHROPIC_API_KEY")
+        )
+        if not _api_key:
+            return "[error: ANTHROPIC_API_KEY not found in secrets — add it at the TOP of secrets.toml, before any [section] headers]"
+        _client = _anthropic.Anthropic(api_key=_api_key)
         _msg = _client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=220,
