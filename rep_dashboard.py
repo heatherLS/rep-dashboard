@@ -2659,6 +2659,48 @@ if page == "📅 Yesterday":
 
 
 # ---------------------------------------------------------------------------
+# ORG CHART HELPER — authoritative rep→TL assignment
+# ---------------------------------------------------------------------------
+_ORG_CHART_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1T93rqMI7-oA3ViAjIdY5bjHLR5hssewSaPuuknpwUkQ"
+    "/export?format=csv&gid=0"
+)
+
+@st.cache_data(show_spinner=False, ttl=600)
+def load_org_chart_assignments(_cache_bust_key: str) -> dict:
+    """Returns {rep_name_lower: tl_name_lower}, both in 'first last' format."""
+    try:
+        _df = pd.read_csv(_ORG_CHART_URL, header=None, dtype=str).fillna("")
+        _tl_cols = {}
+        _header_row_idx = None
+        for _ri, _row in _df.iterrows():
+            for _ci, _val in enumerate(_row):
+                if "sales manager -" in str(_val).lower():
+                    _tl_name = str(_val).split("-", 1)[1].strip().lower()
+                    _tl_cols[_ci] = _tl_name
+                    _header_row_idx = _ri
+        if not _tl_cols or _header_row_idx is None:
+            return {}
+        _assignments = {}
+        for _ri in range(_header_row_idx + 3, len(_df)):  # skip T2 row + count row
+            _row = _df.iloc[_ri]
+            for _ci, _tl in _tl_cols.items():
+                _name = str(_row.iloc[_ci]).strip() if _ci < len(_row) else ""
+                if _name and _name.lower() not in ("nan", ""):
+                    _assignments[_name.lower()] = _tl
+        return _assignments
+    except Exception:
+        return {}
+
+def _tl_key_to_first_last(tl_key: str) -> str:
+    """'Lapuz, Mona' → 'mona lapuz' for org chart matching."""
+    parts = tl_key.split(',', 1)
+    if len(parts) == 2:
+        return f"{parts[1].strip()} {parts[0].strip()}".lower()
+    return tl_key.lower()
+
+# ---------------------------------------------------------------------------
 # QA HELPERS (used by Team Lead Dashboard and My QA page)
 # ---------------------------------------------------------------------------
 _QA_SHEET_ID  = "1Dt7D2nJLmmWyVc39Vss-2nySewiC3pcObRHPDxQ4ads"
@@ -2887,9 +2929,20 @@ if page == "👩‍💻 Team Lead Dashboard":
             _tl_default = manager_directs.index(_tl_name_fmt)
     selected_lead = st.selectbox("Select Your Name (Team Lead):", manager_directs, index=_tl_default)
 
-    # Filter reps under selected team lead + always show Team ABC (new hires in training)
-    _in_training = df['Team Name'].astype(str).str.strip().str.lower() == 'team abc'
-    team_df = df[(df['Manager_Direct'] == selected_lead) | _in_training].copy()
+    # Filter reps under selected team lead using org chart as source of truth
+    _org_assignments = load_org_chart_assignments(cache_bust_key)
+    _tl_first_last = _tl_key_to_first_last(selected_lead)
+    if _org_assignments:
+        _name_lower = (
+            df['First_Name'].astype(str).str.strip() + ' ' +
+            df['Last_Name'].astype(str).str.strip()
+        ).str.strip().str.lower()
+        team_df = df[_name_lower.isin(
+            [n for n, tl in _org_assignments.items() if tl == _tl_first_last]
+        )].copy()
+    else:
+        # Fallback to Manager_Direct if org chart is unreachable
+        team_df = df[df['Manager_Direct'] == selected_lead].copy()
     if 'Name_Proper' not in team_df.columns:
         if 'Full_Name' in team_df.columns:
             team_df['Name_Proper'] = team_df['Full_Name']
