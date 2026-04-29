@@ -2847,10 +2847,9 @@ def load_teams_new_names(_cache_bust_key: str) -> dict:
 @st.cache_data(show_spinner=False, ttl=1800)
 def load_qa_data(_cache_bust_key: str) -> tuple:
     import time as _time
-    import httplib2 as _httplib2
-    import google.auth.transport.httplib2 as _ga_http
+    from urllib.parse import quote as _quote
     from google.oauth2.service_account import Credentials as SACredentials
-    from googleapiclient.discovery import build as gapi_build
+    from google.auth.transport.requests import AuthorizedSession as _AuthSession
 
     _last_err = None
     for _attempt in range(3):
@@ -2860,16 +2859,18 @@ def load_qa_data(_cache_bust_key: str) -> tuple:
                 _sa,
                 scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
             )
-            _authorized_http = _ga_http.AuthorizedHttp(
-                _creds, http=_httplib2.Http(timeout=90)
+            _session = _AuthSession(_creds)
+            _url = (
+                f"https://sheets.googleapis.com/v4/spreadsheets/"
+                f"{_QA_SHEET_ID}/values/{_quote(_QA_SHEET_TAB)}"
             )
-            _svc = gapi_build("sheets", "v4", http=_authorized_http, cache_discovery=False)
-            _result = _svc.spreadsheets().values().get(
-                spreadsheetId=_QA_SHEET_ID,
-                range=_QA_SHEET_TAB,
-                valueRenderOption="UNFORMATTED_VALUE",
-            ).execute()
-            _values = _result.get("values", [])
+            _resp = _session.get(
+                _url,
+                params={"valueRenderOption": "UNFORMATTED_VALUE"},
+                timeout=90,
+            )
+            _resp.raise_for_status()
+            _values = _resp.json().get("values", [])
             if len(_values) < 2:
                 return pd.DataFrame(), "Sheet returned no data rows"
             _headers = _values[0]
@@ -2885,7 +2886,7 @@ def load_qa_data(_cache_bust_key: str) -> tuple:
         except Exception as e:
             _last_err = e
             if _attempt < 2:
-                _time.sleep(2 ** _attempt)  # 1s, then 2s before 3rd attempt
+                _time.sleep(2 ** _attempt)
     try:
         raise _last_err
     except Exception as e:
