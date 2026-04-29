@@ -3226,6 +3226,97 @@ if page == "👩‍💻 Team Lead Dashboard":
                     shout_text = " • ".join(shout_lines)
                     st.markdown(f"🏅 **Honorable Mentions:** {shout_text}")
 
+        # ──────────────────────────────────────────────
+        # 📋 TEAM QA BREAKDOWN
+        # ──────────────────────────────────────────────
+        st.subheader("📋 Team QA Breakdown")
+
+        _tl_cache_bust = datetime.now(eastern).strftime("%Y-%m-%d-%H")
+        with st.spinner("Loading QA data..."):
+            _tl_qa_raw, _tl_qa_err = load_qa_data(_tl_cache_bust)
+
+        if _tl_qa_raw.empty:
+            st.warning("QA data unavailable — please try again shortly.")
+            if _tl_qa_err:
+                st.error(f"Error: {_tl_qa_err}")
+        else:
+            # Build set of canonical agent names for reps on this team
+            _tl_teams_names = load_teams_new_names(_tl_cache_bust)
+            _team_rep_names = set()
+            for _, _tr in team_df.iterrows():
+                _fn = str(_tr.get('First_Name', '')).strip()
+                _ln = str(_tr.get('Last_Name', '')).strip()
+                _rn = f"{_fn} {_ln}".strip()
+                _canonical = _tl_teams_names.get(_rn.lower(), _rn)
+                _team_rep_names.add(_canonical.lower())
+
+            _tl_qa_df = _tl_qa_raw[
+                _tl_qa_raw['Agent'].str.strip().str.lower().isin(_team_rep_names)
+            ].copy()
+
+            if _tl_qa_df.empty:
+                st.info("No QA observations found for this team yet.")
+            else:
+                _score_col_tl = 'New Score' if 'New Score' in _tl_qa_df.columns else 'Score'
+                _tl_qa_df['_month'] = _tl_qa_df['_scoring_week'].dt.to_period('M')
+                _tl_avail = sorted(_tl_qa_df['_month'].dropna().unique(), reverse=True)
+
+                _tl_sel_month_str = st.selectbox(
+                    "📅 Select month",
+                    [str(m) for m in _tl_avail],
+                    key="tl_qa_month_select",
+                )
+                _tl_sel_period = pd.Period(_tl_sel_month_str, freq='M')
+                _tl_month_df = _tl_qa_df[_tl_qa_df['_month'] == _tl_sel_period].copy()
+
+                # Team-level score cards for selected month
+                _tl_m_avg = _tl_month_df[_score_col_tl].dropna().mean()
+                _tl_h1 = _tl_month_df[_tl_month_df['_scoring_week'].dt.day <= 15][_score_col_tl].dropna()
+                _tl_h2 = _tl_month_df[_tl_month_df['_scoring_week'].dt.day > 15][_score_col_tl].dropna()
+
+                _tc1, _tc2, _tc3 = st.columns(3)
+                _tc1.metric("Team Monthly Avg",  f"{_tl_m_avg:.1f}%" if not pd.isna(_tl_m_avg) else "—")
+                _tc2.metric("1st–15th Avg",      f"{_tl_h1.mean():.1f}%" if len(_tl_h1) > 0 else "—",
+                            help="PIP EOR first-half period")
+                _tc3.metric("16th–End Avg",      f"{_tl_h2.mean():.1f}%" if len(_tl_h2) > 0 else "—",
+                            help="PIP EOR second-half period")
+
+                # 3-month bi-monthly breakdown — team average
+                st.markdown("##### 📊 Last 3 Months — Team Average")
+                _tl_recent_3 = sorted(_tl_avail, reverse=True)[:3]
+                _tl_breakdown = []
+                for _tp in _tl_recent_3:
+                    _tmd = _tl_qa_df[_tl_qa_df['_month'] == _tp]
+                    _tbh1 = _tmd[_tmd['_scoring_week'].dt.day <= 15][_score_col_tl].dropna().mean()
+                    _tbh2 = _tmd[_tmd['_scoring_week'].dt.day > 15][_score_col_tl].dropna().mean()
+                    _tbma = _tmd[_score_col_tl].dropna().mean()
+                    _tl_breakdown.append({
+                        "Month":        str(_tp),
+                        "1st–15th Avg": f"{_tbh1:.1f}%" if not pd.isna(_tbh1) else "—",
+                        "16th–End Avg": f"{_tbh2:.1f}%" if not pd.isna(_tbh2) else "—",
+                        "Monthly Avg":  f"{_tbma:.1f}%" if not pd.isna(_tbma) else "—",
+                        "# Obs":        int(_tmd[_score_col_tl].notna().sum()),
+                    })
+                st.dataframe(pd.DataFrame(_tl_breakdown), use_container_width=True, hide_index=True)
+
+                # Per-rep breakdown for selected month
+                st.markdown("##### 👤 Per-Rep Breakdown")
+                _rep_rows = []
+                for _agent_name in sorted(_tl_month_df['Agent'].dropna().unique()):
+                    _rep_df = _tl_month_df[_tl_month_df['Agent'] == _agent_name]
+                    _rh1 = _rep_df[_rep_df['_scoring_week'].dt.day <= 15][_score_col_tl].dropna()
+                    _rh2 = _rep_df[_rep_df['_scoring_week'].dt.day > 15][_score_col_tl].dropna()
+                    _rma = _rep_df[_score_col_tl].dropna().mean()
+                    _rep_rows.append({
+                        "Agent":        _agent_name,
+                        "1st–15th Avg": f"{_rh1.mean():.1f}%" if len(_rh1) > 0 else "—",
+                        "16th–End Avg": f"{_rh2.mean():.1f}%" if len(_rh2) > 0 else "—",
+                        "Monthly Avg":  f"{_rma:.1f}%" if not pd.isna(_rma) else "—",
+                        "# Obs":        len(_rep_df),
+                    })
+                if _rep_rows:
+                    st.dataframe(pd.DataFrame(_rep_rows), use_container_width=True, hide_index=True)
+
         # Placeholder Sections
         st.subheader("🏆 Personal Bests (Coming Soon)")
         st.subheader("⚔️ Compare With Another Team (Coming Soon)")
