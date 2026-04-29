@@ -2844,35 +2844,50 @@ def load_teams_new_names(_cache_bust_key: str) -> dict:
     except Exception:
         return {}
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(show_spinner=False, ttl=1800)
 def load_qa_data(_cache_bust_key: str) -> tuple:
-    try:
-        from google.oauth2.service_account import Credentials as SACredentials
-        from googleapiclient.discovery import build as gapi_build
+    import time as _time
+    import httplib2 as _httplib2
+    import google.auth.transport.httplib2 as _ga_http
+    from google.oauth2.service_account import Credentials as SACredentials
+    from googleapiclient.discovery import build as gapi_build
 
-        _sa = dict(st.secrets["gcp_service_account"])
-        _creds = SACredentials.from_service_account_info(
-            _sa,
-            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
-        )
-        _svc = gapi_build("sheets", "v4", credentials=_creds, cache_discovery=False)
-        _result = _svc.spreadsheets().values().get(
-            spreadsheetId=_QA_SHEET_ID,
-            range=_QA_SHEET_TAB,
-        ).execute()
-        _values = _result.get("values", [])
-        if len(_values) < 2:
-            return pd.DataFrame(), "Sheet returned no data rows"
-        _headers = _values[0]
-        _rows = [r + [""] * (len(_headers) - len(r)) for r in _values[1:]]
-        df = pd.DataFrame(_rows, columns=_headers)
-        df.columns = [re.sub(r'\s+', ' ', c).strip() for c in df.columns]
-        df['_ts'] = pd.to_datetime(df['Timestamp'], errors='coerce')
-        df['_scoring_week'] = pd.to_datetime(df['Scoring Week'], errors='coerce')
-        for col in ['New Score', 'Score', 'Old Score']:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        return df, None
+    _last_err = None
+    for _attempt in range(3):
+        try:
+            _sa = dict(st.secrets["gcp_service_account"])
+            _creds = SACredentials.from_service_account_info(
+                _sa,
+                scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
+            )
+            _authorized_http = _ga_http.AuthorizedHttp(
+                _creds, http=_httplib2.Http(timeout=90)
+            )
+            _svc = gapi_build("sheets", "v4", http=_authorized_http, cache_discovery=False)
+            _result = _svc.spreadsheets().values().get(
+                spreadsheetId=_QA_SHEET_ID,
+                range=_QA_SHEET_TAB,
+                valueRenderOption="UNFORMATTED_VALUE",
+            ).execute()
+            _values = _result.get("values", [])
+            if len(_values) < 2:
+                return pd.DataFrame(), "Sheet returned no data rows"
+            _headers = _values[0]
+            _rows = [r + [""] * (len(_headers) - len(r)) for r in _values[1:]]
+            df = pd.DataFrame(_rows, columns=_headers)
+            df.columns = [re.sub(r'\s+', ' ', c).strip() for c in df.columns]
+            df['_ts'] = pd.to_datetime(df['Timestamp'], errors='coerce')
+            df['_scoring_week'] = pd.to_datetime(df['Scoring Week'], errors='coerce')
+            for col in ['New Score', 'Score', 'Old Score']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            return df, None
+        except Exception as e:
+            _last_err = e
+            if _attempt < 2:
+                _time.sleep(2 ** _attempt)  # 1s, then 2s before 3rd attempt
+    try:
+        raise _last_err
     except Exception as e:
         return pd.DataFrame(), str(e)
 
