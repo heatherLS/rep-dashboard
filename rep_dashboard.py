@@ -2864,11 +2864,7 @@ def load_qa_data(_cache_bust_key: str) -> tuple:
                 f"https://sheets.googleapis.com/v4/spreadsheets/"
                 f"{_QA_SHEET_ID}/values/{_quote(_QA_SHEET_TAB)}"
             )
-            _resp = _session.get(
-                _url,
-                params={"valueRenderOption": "UNFORMATTED_VALUE"},
-                timeout=90,
-            )
+            _resp = _session.get(_url, timeout=90)
             _resp.raise_for_status()
             _values = _resp.json().get("values", [])
             if len(_values) < 2:
