@@ -983,24 +983,30 @@ if page == "📊 Leaderboard":
     df.columns = df.columns.str.strip()
 
     # Resolve correct team name via org chart (fixes "Team ABC" new hires showing wrong logo)
+    # Note: Full_Name is built later (line ~1155) so we derive the name from First/Last here
     _lb_org = load_org_chart_assignments(cache_bust_key)
-    if _lb_org and 'Full_Name' in df.columns and 'Team Name' in df.columns:
+    if _lb_org and 'First_Name' in df.columns and 'Last_Name' in df.columns and 'Team Name' in df.columns:
+        _lb_name_series = (
+            df['First_Name'].astype(str).str.strip() + ' ' +
+            df['Last_Name'].astype(str).str.strip()
+        ).str.strip().str.lower()
         # Build tl_lower → team_name from reps that already have correct assignments
         _lb_tl_to_team = {}
-        for _, _r in df.iterrows():
-            _tn = str(_r.get('Team Name', '')).strip()
-            _fn = str(_r.get('Full_Name', '')).strip().lower()
+        for _idx, _fn in _lb_name_series.items():
+            _tn = str(df.at[_idx, 'Team Name']).strip()
             if _tn.lower() not in ('team abc', '', 'nan') and _fn in _lb_org:
                 _lb_tl_to_team[_lb_org[_fn]] = _tn
-        def _resolve_lb_team(row):
-            _tn = str(row.get('Team Name', '')).strip()
+        # Override Team ABC reps with correct team from org chart
+        def _resolve_lb_team(idx):
+            _tn = str(df.at[idx, 'Team Name']).strip()
             if _tn.lower() in ('team abc', '', 'nan'):
-                _fn = str(row.get('Full_Name', '')).strip().lower()
-                _tl = _lb_org.get(_fn)
+                _tl = _lb_org.get(_lb_name_series[idx])
                 if _tl and _tl in _lb_tl_to_team:
                     return _lb_tl_to_team[_tl]
             return _tn
-        df['Team Name'] = df.apply(_resolve_lb_team, axis=1)
+        df['Team Name'] = pd.Series(
+            {idx: _resolve_lb_team(idx) for idx in df.index}, dtype=str
+        )
 
     # Pull fresh history for records/champions
     history_df = load_history(cache_bust_key).copy()
