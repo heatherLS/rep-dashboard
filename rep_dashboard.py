@@ -78,7 +78,8 @@ def _load_roster_for_auth():
         return raw[['rep_key', 'First_Name', 'Last_Name', 'Current_Role',
                     'Manager_Direct', 'Team Name']].drop_duplicates('rep_key')
     except Exception:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=['rep_key', 'First_Name', 'Last_Name',
+                                     'Current_Role', 'Manager_Direct', 'Team Name'])
 
 roster_auth = _load_roster_for_auth()
 auth_key    = user_email.lower().strip()
@@ -968,6 +969,44 @@ def _tl_key_to_first_last(tl_key: str) -> str:
     if len(parts) == 2:
         return f"{parts[1].strip()} {parts[0].strip()}".lower()
     return tl_key.lower()
+
+# ---------------------------------------------------------------------------
+# CYCLE DATE + QA HELPERS — shared by Calculator and Bonus pages
+# ---------------------------------------------------------------------------
+_CYCLES_GOALS_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1xcDapn7IaL6EaazJj8mnaehUici7N2vofqGTR6AJ2f0"
+    "/export?format=csv&gid=0"
+)
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def load_cycle_dates(_cache_bust_key: str):
+    """Returns (start_date, end_date) from E2 of Cycles/Goals/Scales sheet."""
+    try:
+        _df = pd.read_csv(_CYCLES_GOALS_URL, header=None, dtype=str).fillna("")
+        _e2 = str(_df.iat[1, 4]).strip()  # row 2, col E
+        _parts = _e2.split(' - ')
+        if len(_parts) == 2:
+            _s = pd.to_datetime(_parts[0].strip(), errors='coerce')
+            _e = pd.to_datetime(_parts[1].strip(), errors='coerce')
+            if pd.notna(_s) and pd.notna(_e):
+                return _s.date(), _e.date()
+    except Exception:
+        pass
+    return None, None
+
+def _rep_qa_for_cycle(qa_df, agent_name: str, cycle_start, cycle_end):
+    """Average New Score for agent where Scoring Week falls in [cycle_start, cycle_end]."""
+    if qa_df is None or qa_df.empty or not agent_name or not cycle_start:
+        return None
+    _sc = 'New Score' if 'New Score' in qa_df.columns else 'Score'
+    _df = qa_df[qa_df['Agent'].str.strip().str.lower() == agent_name.strip().lower()]
+    _df = _df[
+        (_df['_scoring_week'].dt.date >= cycle_start) &
+        (_df['_scoring_week'].dt.date <= cycle_end)
+    ]
+    _vals = _df[_sc].dropna()
+    return float(_vals.mean()) if len(_vals) > 0 else None
 
 if page == "📊 Leaderboard":
     st.markdown("<h1 style='text-align: center;'>📊 Conversion Rate Leaderboard</h1>", unsafe_allow_html=True)
@@ -1898,18 +1937,43 @@ if page == "🧮 Calculator":
         cycle_conv   = _pct_val(_cc.get('Conversion', 0))
         cycle_att    = _pct_val(_cc.get('Attach', 0))
         cycle_lt     = _pct_val(_cc.get('LT', 0))
-        cycle_qa     = _pct_val(_cc.get('QA', 0))
+        # Compute QA from observation sheet (Scoring Week within current cycle)
+        _calc_cache_key = datetime.now(eastern).strftime('%Y-%m-%d-%H')
+        _cy_s, _cy_e = load_cycle_dates(_calc_cache_key)
+        _calc_qa_obs = None
+        if _cy_s and _cy_e:
+            _calc_qa_raw, _ = load_qa_data(_calc_cache_key)
+            if not _calc_qa_raw.empty:
+                _calc_canon = load_teams_new_names(_calc_cache_key).get(_vname.lower(), _vname)
+                _calc_qa_obs = _rep_qa_for_cycle(_calc_qa_raw, _calc_canon, _cy_s, _cy_e)
+        cycle_qa = _calc_qa_obs if _calc_qa_obs is not None else _pct_val(_cc.get('QA', 0))
         cycle_tier   = str(_cc.get('Bonus Tier', '—')).strip()
         cycle_pts    = str(_cc.get('Total Points', '0')).strip()
 
         # Load live cycle tiers
-        _conv_tiers   = load_section_tiers(BONUS_SHEET_URL, "Conversion")
-        _attach_tiers = load_section_tiers(BONUS_SHEET_URL, "All-In Attach Rate")
-        _qa_tiers     = load_section_tiers(BONUS_SHEET_URL, "QA")
+        _conv_tiers   = load_section_tiers(BONUS_SHEET_URL, "Conversion")   or [(27,5),(25,4),(24,3),(22,2),(21,1),(20,0)]
+        _attach_tiers = load_section_tiers(BONUS_SHEET_URL, "All-In Attach Rate") or [(27,2),(26,1),(25,0)]
+        _qa_tiers     = load_section_tiers(BONUS_SHEET_URL, "QA")          or [(100,2),(92,1),(80,0)]
+
+        # Compute points locally so QA (from observations) is always reflected
+        def _pts(val, tiers):
+            for _t, _p in sorted(tiers, key=lambda x: -x[0]):
+                if val >= _t:
+                    return _p
+            return 0
+
+        _calc_conv_pts   = _pts(cycle_conv, _conv_tiers)
+        _calc_attach_pts = _pts(cycle_att,  _attach_tiers)
+        _calc_qa_pts     = _pts(cycle_qa,   _qa_tiers)
+        _calc_total_pts  = _calc_conv_pts + _calc_attach_pts + _calc_qa_pts
 
         # ── Current standing ───────────────────────────────────────────────
-        st.caption(f"Cycle data for **{_vname}** — updates every 5 min from CurrentCycle tab.")
-        st.markdown(f"**Current Tier:** {cycle_tier} &nbsp;|&nbsp; **Total Points:** {cycle_pts}")
+        st.caption(f"Cycle data for **{_vname}** — QA from observations, other metrics from CurrentCycle tab.")
+        st.markdown(
+            f"**Current Tier:** {cycle_tier} &nbsp;|&nbsp; "
+            f"**Total Points:** {_calc_total_pts} "
+            f"*(Conv: {_calc_conv_pts} + Attach: {_calc_attach_pts} + QA: {_calc_qa_pts})*"
+        )
         st.markdown("<br>", unsafe_allow_html=True)
 
         _c1, _c2, _c3, _c4 = st.columns(4)
@@ -1922,13 +1986,13 @@ if page == "🧮 Calculator":
             st.metric("Wins", cycle_wins)
         with _c2:
             st.metric("Conversion", f"{cycle_conv:.1f}%")
-            st.caption(_tier_label(cycle_conv, _conv_tiers))
+            st.caption(f"{_tier_label(cycle_conv, _conv_tiers)} · {_calc_conv_pts} pt(s)")
         with _c3:
             st.metric("All-In Attach", f"{cycle_att:.1f}%")
-            st.caption(_tier_label(cycle_att, _attach_tiers))
+            st.caption(f"{_tier_label(cycle_att, _attach_tiers)} · {_calc_attach_pts} pt(s)")
         with _c4:
             st.metric("QA", f"{cycle_qa:.1f}%")
-            st.caption(_tier_label(cycle_qa, _qa_tiers))
+            st.caption(f"{_tier_label(cycle_qa, _qa_tiers)} · {_calc_qa_pts} pt(s)")
 
         # ── What-If Projector ──────────────────────────────────────────────
         st.markdown("### 🔮 What-If Projector")
@@ -2207,10 +2271,22 @@ if page == "💰Bonus & History":
     if _bonus_has_data:
         row = match.iloc[0]
 
+        # Compute QA from observation sheet (Scoring Week within current cycle)
+        _bonus_qa_val = percent(row.get('BonusQA', 0))  # fallback
+        _bcy_s, _bcy_e = load_cycle_dates(cache_bust_key)
+        if _bcy_s and _bcy_e:
+            _bqa_raw, _ = load_qa_data(cache_bust_key)
+            if not _bqa_raw.empty:
+                _brn = f"{str(row.get('First_Name','')).strip()} {str(row.get('Last_Name','')).strip()}".strip()
+                _bcanon = load_teams_new_names(cache_bust_key).get(_brn.lower(), _brn)
+                _bqa_obs = _rep_qa_for_cycle(_bqa_raw, _bcanon, _bcy_s, _bcy_e)
+                if _bqa_obs is not None:
+                    _bonus_qa_val = _bqa_obs
+
         metrics = {
             'Conversion': percent(row.get('BonusConversion', 0)),
             'All-In Attach': percent(row.get('BonusAllinAttach', 0)),
-            'QA': percent(row.get('BonusQA', 0))
+            'QA': _bonus_qa_val,
         }
 
         points = {
@@ -2219,7 +2295,11 @@ if page == "💰Bonus & History":
             'QA': get_points(metrics['QA'], qa_tiers)
         }
 
+        _bonus_total_pts = sum(points.values())
+
         st.subheader(f"🧑‍🌾 Growth Stats for {row.get('First_Name', viewed_first)}")
+        st.markdown(f"**Total Points: {_bonus_total_pts}** *(Conv: {points['Conversion']} + Attach: {points['All-In Attach']} + QA: {points['QA']})*")
+        st.markdown("<br>", unsafe_allow_html=True)
         for k in metrics:
             st.markdown(f"**{k}**: {metrics[k]:.2f}% — Points: `{points[k]}`")
 
@@ -2847,26 +2927,26 @@ def load_teams_new_names(_cache_bust_key: str) -> dict:
 @st.cache_data(show_spinner=False, ttl=1800)
 def load_qa_data(_cache_bust_key: str) -> tuple:
     import time as _time
-    from urllib.parse import quote as _quote
+    import socket as _socket
     from google.oauth2.service_account import Credentials as SACredentials
-    from google.auth.transport.requests import AuthorizedSession as _AuthSession
+    from googleapiclient.discovery import build as gapi_build
 
     _last_err = None
     for _attempt in range(3):
+        _prev_timeout = _socket.getdefaulttimeout()
         try:
             _sa = dict(st.secrets["gcp_service_account"])
             _creds = SACredentials.from_service_account_info(
                 _sa,
                 scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
             )
-            _session = _AuthSession(_creds)
-            _url = (
-                f"https://sheets.googleapis.com/v4/spreadsheets/"
-                f"{_QA_SHEET_ID}/values/{_quote(_QA_SHEET_TAB)}"
-            )
-            _resp = _session.get(_url, timeout=90)
-            _resp.raise_for_status()
-            _values = _resp.json().get("values", [])
+            _socket.setdefaulttimeout(60)  # hard cap on every socket call incl. auth
+            _svc = gapi_build("sheets", "v4", credentials=_creds, cache_discovery=False)
+            _result = _svc.spreadsheets().values().get(
+                spreadsheetId=_QA_SHEET_ID,
+                range=_QA_SHEET_TAB,
+            ).execute()
+            _values = _result.get("values", [])
             if len(_values) < 2:
                 return pd.DataFrame(), "Sheet returned no data rows"
             _headers = _values[0]
@@ -2883,10 +2963,9 @@ def load_qa_data(_cache_bust_key: str) -> tuple:
             _last_err = e
             if _attempt < 2:
                 _time.sleep(2 ** _attempt)
-    try:
-        raise _last_err
-    except Exception as e:
-        return pd.DataFrame(), str(e)
+        finally:
+            _socket.setdefaulttimeout(_prev_timeout)  # always restore
+    return pd.DataFrame(), str(_last_err)
 
 # 👩‍💻 TAB 5:  Team Lead Dashboard
 # --------------------------------------------
