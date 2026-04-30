@@ -2924,48 +2924,58 @@ def load_teams_new_names(_cache_bust_key: str) -> dict:
     except Exception:
         return {}
 
-@st.cache_data(show_spinner=False, ttl=1800)
-def load_qa_data(_cache_bust_key: str) -> tuple:
-    import time as _time
-    import socket as _socket
+def _fetch_qa_data_fresh() -> tuple:
+    """Fetch QA data via requests with hard 30-second timeout on every call (auth + data)."""
+    import requests as _req
+    import functools as _functools
     from google.oauth2.service_account import Credentials as SACredentials
-    from googleapiclient.discovery import build as gapi_build
+    from google.auth.transport.requests import Request as GARequest
+    try:
+        _sa = dict(st.secrets["gcp_service_account"])
+        _creds = SACredentials.from_service_account_info(
+            _sa, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
+        )
+        # Every HTTP call (token refresh + data) gets a hard 30-second timeout
+        _session = _req.Session()
+        _session.request = _functools.partial(_session.request, timeout=30)
+        _creds.refresh(GARequest(session=_session))
+        _api_url = (
+            f"https://sheets.googleapis.com/v4/spreadsheets/{_QA_SHEET_ID}"
+            f"/values/{_QA_SHEET_TAB}"
+        )
+        _resp = _session.get(_api_url, headers={"Authorization": f"Bearer {_creds.token}"})
+        _resp.raise_for_status()
+        _values = _resp.json().get("values", [])
+        if len(_values) < 2:
+            return pd.DataFrame(), "Sheet returned no data rows"
+        _headers = _values[0]
+        _rows = [r + [""] * (len(_headers) - len(r)) for r in _values[1:]]
+        df = pd.DataFrame(_rows, columns=_headers)
+        df.columns = [re.sub(r'\s+', ' ', c).strip() for c in df.columns]
+        df['_ts'] = pd.to_datetime(df['Timestamp'], errors='coerce')
+        df['_scoring_week'] = pd.to_datetime(df['Scoring Week'], errors='coerce')
+        for col in ['New Score', 'Score', 'Old Score']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        return df, None
+    except Exception as e:
+        return pd.DataFrame(), str(e)
 
-    _last_err = None
-    for _attempt in range(3):
-        _prev_timeout = _socket.getdefaulttimeout()
-        try:
-            _sa = dict(st.secrets["gcp_service_account"])
-            _creds = SACredentials.from_service_account_info(
-                _sa,
-                scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
-            )
-            _socket.setdefaulttimeout(60)  # hard cap on every socket call incl. auth
-            _svc = gapi_build("sheets", "v4", credentials=_creds, cache_discovery=False)
-            _result = _svc.spreadsheets().values().get(
-                spreadsheetId=_QA_SHEET_ID,
-                range=_QA_SHEET_TAB,
-            ).execute()
-            _values = _result.get("values", [])
-            if len(_values) < 2:
-                return pd.DataFrame(), "Sheet returned no data rows"
-            _headers = _values[0]
-            _rows = [r + [""] * (len(_headers) - len(r)) for r in _values[1:]]
-            df = pd.DataFrame(_rows, columns=_headers)
-            df.columns = [re.sub(r'\s+', ' ', c).strip() for c in df.columns]
-            df['_ts'] = pd.to_datetime(df['Timestamp'], errors='coerce')
-            df['_scoring_week'] = pd.to_datetime(df['Scoring Week'], errors='coerce')
-            for col in ['New Score', 'Score', 'Old Score']:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-            return df, None
-        except Exception as e:
-            _last_err = e
-            if _attempt < 2:
-                _time.sleep(2 ** _attempt)
-        finally:
-            _socket.setdefaulttimeout(_prev_timeout)  # always restore
-    return pd.DataFrame(), str(_last_err)
+
+def load_qa_data(_cache_bust_key: str = "") -> tuple:
+    """Per-session QA cache (30-min TTL). Loads once per user, not shared across users."""
+    _now = datetime.now()
+    _cache = st.session_state.get("_qa_data_ss_cache")
+    if _cache and (_now - _cache["loaded_at"]).total_seconds() < 1800:
+        return _cache["df"], _cache["err"]
+    df, err = _fetch_qa_data_fresh()
+    if not df.empty:
+        st.session_state["_qa_data_ss_cache"] = {"df": df, "err": err, "loaded_at": _now}
+        return df, err
+    if _cache:
+        # Stale data is better than nothing — return it with the new error
+        return _cache["df"], err
+    return df, err
 
 # 👩‍💻 TAB 5:  Team Lead Dashboard
 # --------------------------------------------
