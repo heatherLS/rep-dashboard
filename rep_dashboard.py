@@ -2652,8 +2652,6 @@ if page == "💰Bonus & History":
         # ── LAST CYCLE RECAP ──────────────────────────────────────────────────
         st.markdown("---")
         _lc_info = load_last_cycle_info(cache_bust_key)
-        if not _lc_info:
-            st.caption("⚠️ Last cycle data unavailable — could not parse cycle dates from sheet.")
         if _lc_info:
             st.subheader(f"🔁 Last Cycle Recap  ·  {_lc_info['cycle_str']}")
             st.caption("QA scores are graded one week after the cycle ends — this shows your finalized numbers for the previous cycle.")
@@ -2854,10 +2852,83 @@ if page == "💰Bonus & History":
     tiers_df = pd.DataFrame(rows, columns=columns)
     st.dataframe(tiers_df, use_container_width=True, hide_index=True)
 
-    # Points bar chart (only when rep data is available)
-    if _bonus_has_data:
-        chart = pd.DataFrame({"Metric": list(points.keys()), "Points": list(points.values())})
-        st.bar_chart(chart.set_index("Metric"))
+    # ── 📈 Monthly Trends — Conversion & Attach ──────────────────────────────
+    st.markdown("---")
+    st.subheader("📈 Monthly Trends — Conversion & Attach")
+
+    _trend_hist = rep_history.copy()
+    _trend_hist['Date'] = pd.to_datetime(
+        _trend_hist.get('Date', pd.Series(dtype=str)), errors='coerce'
+    )
+    for _tc in ['Calls', 'Wins', 'Lawn Treatment', 'Mosquito', 'Bush Trimming',
+                'Flower Bed Weeding', 'Leaf Removal', 'Pool']:
+        if _tc in _trend_hist.columns:
+            _trend_hist[_tc] = pd.to_numeric(_trend_hist[_tc], errors='coerce').fillna(0)
+        else:
+            _trend_hist[_tc] = 0
+
+    _t_attach_cols = [c for c in ['Lawn Treatment', 'Mosquito', 'Bush Trimming',
+                                   'Flower Bed Weeding', 'Leaf Removal', 'Pool']
+                      if c in _trend_hist.columns]
+
+    _trend_hist['_month'] = _trend_hist['Date'].dt.to_period('M')
+    _trend_avail = sorted(_trend_hist['_month'].dropna().unique(), reverse=True)
+
+    def _t_conv(df):
+        c = df['Calls'].sum()
+        w = df['Wins'].sum()
+        return (w / c * 100) if c > 0 else None
+
+    def _t_attach(df):
+        w = df['Wins'].sum()
+        a = sum(df[s].sum() for s in _t_attach_cols)
+        return (a / w * 100) if w > 0 else None
+
+    def _tf(v):
+        return f"{v:.1f}%" if v is not None else "—"
+
+    if not _trend_avail:
+        st.caption("No history data available.")
+    else:
+        _trend_sel_str = st.selectbox(
+            "📅 Select month",
+            [str(m) for m in _trend_avail],
+            key="bonus_trend_month_select",
+        )
+        _trend_period = pd.Period(_trend_sel_str, freq='M')
+        _tmd = _trend_hist[_trend_hist['_month'] == _trend_period]
+        _tmh1 = _tmd[_tmd['Date'].dt.day <= 15]
+        _tmh2 = _tmd[_tmd['Date'].dt.day > 15]
+
+        st.markdown("**🔄 Conversion**")
+        _cc1, _cc2, _cc3 = st.columns(3)
+        _cc1.metric("Monthly Avg",  _tf(_t_conv(_tmd)))
+        _cc2.metric("1st–15th Avg", _tf(_t_conv(_tmh1)), help="PIP EOR first-half period")
+        _cc3.metric("16th–End Avg", _tf(_t_conv(_tmh2)), help="PIP EOR second-half period")
+
+        st.markdown("**📎 All-In Attach**")
+        _ac1, _ac2, _ac3 = st.columns(3)
+        _ac1.metric("Monthly Avg",  _tf(_t_attach(_tmd)))
+        _ac2.metric("1st–15th Avg", _tf(_t_attach(_tmh1)), help="PIP EOR first-half period")
+        _ac3.metric("16th–End Avg", _tf(_t_attach(_tmh2)), help="PIP EOR second-half period")
+
+        # ── 3-month breakdown ─────────────────────────────────────────────────
+        st.subheader("📊 Conversion & Attach Breakdown — Last 3 Months")
+        _t3_rows = []
+        for _tp in sorted(_trend_avail, reverse=True)[:3]:
+            _td = _trend_hist[_trend_hist['_month'] == _tp]
+            _tdh1 = _td[_td['Date'].dt.day <= 15]
+            _tdh2 = _td[_td['Date'].dt.day > 15]
+            _t3_rows.append({
+                "Month":           str(_tp),
+                "Conv 1st–15th":   _tf(_t_conv(_tdh1)),
+                "Conv 16th–End":   _tf(_t_conv(_tdh2)),
+                "Conv Monthly":    _tf(_t_conv(_td)),
+                "Attach 1st–15th": _tf(_t_attach(_tdh1)),
+                "Attach 16th–End": _tf(_t_attach(_tdh2)),
+                "Attach Monthly":  _tf(_t_attach(_td)),
+            })
+        st.dataframe(pd.DataFrame(_t3_rows), use_container_width=True, hide_index=True)
 
 
 # --------------------------------------------
