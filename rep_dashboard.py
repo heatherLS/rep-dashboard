@@ -998,29 +998,31 @@ def load_cycle_dates(_cache_bust_key: str):
 @st.cache_data(show_spinner=False, ttl=3600)
 def load_last_cycle_info(_cache_bust_key: str):
     """
-    Scans every cell in the Cycles sheet for date-range strings (M/D/YYYY - M/D/YYYY),
-    finds the most recently completed cycle, and reads goals from the 4 columns to the right.
-    Column-position-agnostic so it works regardless of hidden/merged cells in the sheet.
+    Locates the 'Cycle/Conversion/Attach/LT/QA' header row in the Cycles sheet,
+    then scans only the Cycle column for date-range strings and reads goals from
+    the exact named-column positions — avoids picking up dates in other sheet sections.
     """
     import re as _re
     try:
         _df = pd.read_csv(_CYCLES_GOALS_URL, header=None, dtype=str).fillna("")
         _today = datetime.now().date()
-        _ncols = len(_df.columns)
+        _nrows, _ncols = len(_df), len(_df.columns)
         _pat = _re.compile(r'\d{1,2}/\d{1,2}/\d{4}\s*-\s*\d{1,2}/\d{1,2}/\d{4}')
 
-        def _parse_range(v):
-            v = str(v).strip()
-            if not _pat.fullmatch(v):
-                return None, None
-            _p = v.split(' - ')
-            if len(_p) != 2:
-                return None, None
-            _s = pd.to_datetime(_p[0].strip(), errors='coerce')
-            _e = pd.to_datetime(_p[1].strip(), errors='coerce')
-            if pd.isna(_s) or pd.isna(_e):
-                return None, None
-            return _s.date(), _e.date()
+        # Step 1 — find the header row that has 'Cycle' AND 'QA' labels
+        _col = {}  # maps label → column index
+        _header_ri = None
+        for _ri in range(min(10, _nrows)):
+            _vals = [str(_df.iat[_ri, _ci]).strip().lower() for _ci in range(_ncols)]
+            if 'cycle' in _vals and 'qa' in _vals:
+                for _lbl in ('cycle', 'conversion', 'attach', 'lt', 'qa'):
+                    if _lbl in _vals:
+                        _col[_lbl] = _vals.index(_lbl)
+                _header_ri = _ri
+                break
+
+        if 'cycle' not in _col or 'qa' not in _col:
+            return None
 
         def _pv(v):
             try:
@@ -1028,36 +1030,36 @@ def load_last_cycle_info(_cache_bust_key: str):
             except Exception:
                 return None
 
-        # Collect every completed cycle (end < today) from any cell in the sheet
-        _candidates = []
-        for _ri in range(len(_df)):
-            for _ci in range(_ncols):
-                _sd, _ed = _parse_range(_df.iat[_ri, _ci])
-                if _sd and _ed and _ed < _today:
-                    # Read goals from the next 4 columns to the right
-                    _g = [
-                        _pv(_df.iat[_ri, _ci + _off]) if _ci + _off < _ncols else None
-                        for _off in range(1, 5)
-                    ]
-                    _candidates.append((_ed, _ri, _ci, str(_df.iat[_ri, _ci]).strip(), _sd, _g))
-
-        if not _candidates:
-            return None
-
-        # Prefer the most recent cycle that has at least one goal value
-        _with_goals = [c for c in _candidates if any(g is not None for g in c[5])]
-        _best = max(_with_goals if _with_goals else _candidates, key=lambda x: x[0])
-
-        _ed, _ri, _ci, _cs, _sd, _g = _best
-        return {
-            'cycle_str':   _cs,
-            'start':       _sd,
-            'end':         _ed,
-            'conv_goal':   _g[0],
-            'attach_goal': _g[1],
-            'lt_goal':     _g[2],
-            'qa_goal':     _g[3],
-        }
+        # Step 2 — scan the Cycle column (and the one right after, for off-by-one safety)
+        _best = None
+        for _ri in range(_header_ri + 1, _nrows):
+            for _cc in [_col['cycle'], _col['cycle'] + 1]:
+                if _cc >= _ncols:
+                    continue
+                _v = str(_df.iat[_ri, _cc]).strip()
+                if not _pat.fullmatch(_v):
+                    continue
+                _parts = _v.split(' - ')
+                _s = pd.to_datetime(_parts[0].strip(), errors='coerce')
+                _e = pd.to_datetime(_parts[1].strip(), errors='coerce')
+                if pd.isna(_s) or pd.isna(_e):
+                    continue
+                _sd, _ed = _s.date(), _e.date()
+                if _ed >= _today:
+                    break
+                if _best is None or _ed > _best['end']:
+                    _best = {
+                        'cycle_str':   _v,
+                        'start':       _sd,
+                        'end':         _ed,
+                        # Read goals from the exact named columns, not relative offsets
+                        'conv_goal':   _pv(_df.iat[_ri, _col['conversion']]) if 'conversion' in _col else None,
+                        'attach_goal': _pv(_df.iat[_ri, _col['attach']])     if 'attach'     in _col else None,
+                        'lt_goal':     _pv(_df.iat[_ri, _col['lt']])         if 'lt'         in _col else None,
+                        'qa_goal':     _pv(_df.iat[_ri, _col['qa']]),
+                    }
+                break
+        return _best
     except Exception:
         return None
 
