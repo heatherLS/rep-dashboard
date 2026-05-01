@@ -2542,7 +2542,36 @@ if page == "💰Bonus & History":
 
         _bonus_total_pts = sum(points.values())
 
+        # Cycle-to-date raw counts from history sheet
+        _cy_hist = load_history(cache_bust_key).copy()
+        _cy_hist.columns = _cy_hist.columns.str.strip()
+        _cy_hist['Date'] = pd.to_datetime(_cy_hist.get('Date', pd.Series(dtype=str)), errors='coerce')
+        for _cyc in ['Calls', 'Wins', 'Lawn Treatment', 'Mosquito', 'Bush Trimming',
+                     'Flower Bed Weeding', 'Leaf Removal', 'Pool']:
+            if _cyc in _cy_hist.columns:
+                _cy_hist[_cyc] = pd.to_numeric(_cy_hist[_cyc], errors='coerce').fillna(0)
+            else:
+                _cy_hist[_cyc] = 0
+        if _bcy_s and _bcy_e:
+            _cy_rep = _cy_hist[
+                (_cy_hist['Rep'].astype(str).str.lower().str.strip() == email.strip().lower()) &
+                (_cy_hist['Date'].dt.date >= _bcy_s) &
+                (_cy_hist['Date'].dt.date <= _bcy_e)
+            ]
+        else:
+            _cy_rep = _cy_hist.iloc[0:0]
+        _cy_calls  = int(_cy_rep['Calls'].sum())
+        _cy_wins   = int(_cy_rep['Wins'].sum())
+        _cy_att_svc = [c for c in ['Lawn Treatment', 'Mosquito', 'Bush Trimming',
+                                    'Flower Bed Weeding', 'Leaf Removal', 'Pool']
+                       if c in _cy_rep.columns]
+        _cy_attach = int(sum(_cy_rep[c].sum() for c in _cy_att_svc))
+
         st.subheader(f"🧑‍🌾 Growth Stats for {row.get('First_Name', viewed_first)}")
+        _cnt1, _cnt2, _cnt3 = st.columns(3)
+        _cnt1.metric("Calls (cycle)", f"{_cy_calls:,}")
+        _cnt2.metric("Wins (cycle)",  f"{_cy_wins:,}")
+        _cnt3.metric("All-In Attaches (cycle)", f"{_cy_attach:,}")
         st.markdown(f"**Total Points: {_bonus_total_pts}** *(Conv: {points['Conversion']} + Attach: {points['All-In Attach']} + QA: {points['QA']})*")
         st.markdown("<br>", unsafe_allow_html=True)
         for k in metrics:
