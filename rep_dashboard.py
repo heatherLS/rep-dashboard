@@ -997,39 +997,67 @@ def load_cycle_dates(_cache_bust_key: str):
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def load_last_cycle_info(_cache_bust_key: str):
-    """Returns dict with most recently completed cycle: dates + goals from col O/P/Q/R/S."""
+    """
+    Scans every cell in the Cycles sheet for date-range strings (M/D/YYYY - M/D/YYYY),
+    finds the most recently completed cycle, and reads goals from the 4 columns to the right.
+    Column-position-agnostic so it works regardless of hidden/merged cells in the sheet.
+    """
+    import re as _re
     try:
         _df = pd.read_csv(_CYCLES_GOALS_URL, header=None, dtype=str).fillna("")
         _today = datetime.now().date()
-        _best = None
-        for _ri in range(2, len(_df)):
-            _cs = str(_df.iat[_ri, 14]).strip()  # col O = Cycle range string
-            if not _cs or ' - ' not in _cs:
-                continue
-            _parts = _cs.split(' - ')
-            if len(_parts) != 2:
-                continue
-            _s = pd.to_datetime(_parts[0].strip(), errors='coerce')
-            _e = pd.to_datetime(_parts[1].strip(), errors='coerce')
+        _ncols = len(_df.columns)
+        _pat = _re.compile(r'\d{1,2}/\d{1,2}/\d{4}\s*-\s*\d{1,2}/\d{1,2}/\d{4}')
+
+        def _parse_range(v):
+            v = str(v).strip()
+            if not _pat.fullmatch(v):
+                return None, None
+            _p = v.split(' - ')
+            if len(_p) != 2:
+                return None, None
+            _s = pd.to_datetime(_p[0].strip(), errors='coerce')
+            _e = pd.to_datetime(_p[1].strip(), errors='coerce')
             if pd.isna(_s) or pd.isna(_e):
-                continue
-            _sd, _ed = _s.date(), _e.date()
-            if _ed < _today and (_best is None or _ed > _best['end']):
-                def _pv(v):
-                    try:
-                        return float(str(v).replace('%', '').strip())
-                    except Exception:
-                        return None
-                _best = {
-                    'cycle_str':   _cs,
-                    'start':       _sd,
-                    'end':         _ed,
-                    'conv_goal':   _pv(_df.iat[_ri, 15]),  # P = Conversion
-                    'attach_goal': _pv(_df.iat[_ri, 16]),  # Q = Attach
-                    'lt_goal':     _pv(_df.iat[_ri, 17]),  # R = LT
-                    'qa_goal':     _pv(_df.iat[_ri, 18]),  # S = QA
-                }
-        return _best
+                return None, None
+            return _s.date(), _e.date()
+
+        def _pv(v):
+            try:
+                return float(str(v).replace('%', '').strip())
+            except Exception:
+                return None
+
+        # Collect every completed cycle (end < today) from any cell in the sheet
+        _candidates = []
+        for _ri in range(len(_df)):
+            for _ci in range(_ncols):
+                _sd, _ed = _parse_range(_df.iat[_ri, _ci])
+                if _sd and _ed and _ed < _today:
+                    # Read goals from the next 4 columns to the right
+                    _g = [
+                        _pv(_df.iat[_ri, _ci + _off]) if _ci + _off < _ncols else None
+                        for _off in range(1, 5)
+                    ]
+                    _candidates.append((_ed, _ri, _ci, str(_df.iat[_ri, _ci]).strip(), _sd, _g))
+
+        if not _candidates:
+            return None
+
+        # Prefer the most recent cycle that has at least one goal value
+        _with_goals = [c for c in _candidates if any(g is not None for g in c[5])]
+        _best = max(_with_goals if _with_goals else _candidates, key=lambda x: x[0])
+
+        _ed, _ri, _ci, _cs, _sd, _g = _best
+        return {
+            'cycle_str':   _cs,
+            'start':       _sd,
+            'end':         _ed,
+            'conv_goal':   _g[0],
+            'attach_goal': _g[1],
+            'lt_goal':     _g[2],
+            'qa_goal':     _g[3],
+        }
     except Exception:
         return None
 
@@ -2634,6 +2662,8 @@ if page == "💰Bonus & History":
         # ── LAST CYCLE RECAP ──────────────────────────────────────────────────
         st.markdown("---")
         _lc_info = load_last_cycle_info(cache_bust_key)
+        if not _lc_info:
+            st.caption("⚠️ Last cycle data unavailable — could not parse cycle dates from sheet.")
         if _lc_info:
             st.subheader(f"🔁 Last Cycle Recap  ·  {_lc_info['cycle_str']}")
             st.caption("QA scores are graded one week after the cycle ends — this shows your finalized numbers for the previous cycle.")
