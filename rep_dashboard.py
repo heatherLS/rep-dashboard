@@ -1129,9 +1129,9 @@ def load_teams_new_names(_cache_bust_key: str) -> dict:
         return {}
 
 def _fetch_qa_data_fresh() -> tuple:
-    """Fetch QA data via requests with hard 30-second timeout on every call (auth + data)."""
+    """Fetch QA data. Token refresh and HTTP fetch each have explicit timeouts."""
     import requests as _req
-    import functools as _functools
+    import io as _io
     from google.oauth2.service_account import Credentials as SACredentials
     from google.auth.transport.requests import Request as GARequest
     try:
@@ -1139,25 +1139,39 @@ def _fetch_qa_data_fresh() -> tuple:
         _creds = SACredentials.from_service_account_info(
             _sa, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
         )
-        # Every HTTP call (token refresh + data) gets a hard 30-second timeout
         _session = _req.Session()
-        _session.request = _functools.partial(_session.request, timeout=30)
-        _creds.refresh(GARequest(session=_session))
-        _api_url = (
+        # timeout= on GARequest controls the token-exchange POST (no functools.partial conflict)
+        _creds.refresh(GARequest(session=_session, timeout=20))
+        _hdrs = {"Authorization": f"Bearer {_creds.token}"}
+
+        # Step 1: lightweight metadata call to get the GID for the Sales tab
+        _meta_url = (
             f"https://sheets.googleapis.com/v4/spreadsheets/{_QA_SHEET_ID}"
-            f"/values/{_QA_SHEET_TAB}"
+            f"?fields=sheets.properties"
         )
-        _resp = _session.get(_api_url, headers={"Authorization": f"Bearer {_creds.token}"})
+        _meta = _session.get(_meta_url, headers=_hdrs, timeout=(5, 10)).json()
+        _gid = next(
+            (s["properties"]["sheetId"] for s in _meta.get("sheets", [])
+             if s.get("properties", {}).get("title") == _QA_SHEET_TAB),
+            None,
+        )
+        if _gid is None:
+            return pd.DataFrame(), f"Tab '{_QA_SHEET_TAB}' not found in spreadsheet"
+
+        # Step 2: fetch as CSV (much smaller than JSON — no per-row type overhead)
+        _csv_url = (
+            f"https://docs.google.com/spreadsheets/d/{_QA_SHEET_ID}"
+            f"/export?format=csv&gid={_gid}"
+        )
+        _resp = _session.get(_csv_url, headers=_hdrs, timeout=(5, 45))
         _resp.raise_for_status()
-        _values = _resp.json().get("values", [])
-        if len(_values) < 2:
+
+        df = pd.read_csv(_io.StringIO(_resp.text))
+        if df.empty:
             return pd.DataFrame(), "Sheet returned no data rows"
-        _headers = _values[0]
-        _rows = [r + [""] * (len(_headers) - len(r)) for r in _values[1:]]
-        df = pd.DataFrame(_rows, columns=_headers)
         df.columns = [re.sub(r'\s+', ' ', c).strip() for c in df.columns]
-        df['_ts'] = pd.to_datetime(df['Timestamp'], errors='coerce')
-        df['_scoring_week'] = pd.to_datetime(df['Scoring Week'], errors='coerce')
+        df['_ts'] = pd.to_datetime(df.get('Timestamp', pd.Series(dtype=str)), errors='coerce')
+        df['_scoring_week'] = pd.to_datetime(df.get('Scoring Week', pd.Series(dtype=str)), errors='coerce')
         for col in ['New Score', 'Score', 'Old Score']:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -1167,17 +1181,19 @@ def _fetch_qa_data_fresh() -> tuple:
 
 
 def load_qa_data(_cache_bust_key: str = "") -> tuple:
-    """Per-session QA cache (30-min TTL). Loads once per user, not shared across users."""
+    """Per-session QA cache. Success cached 30 min; errors cached 60 s to stop re-hammering."""
     _now = datetime.now()
     _cache = st.session_state.get("_qa_data_ss_cache")
-    if _cache and (_now - _cache["loaded_at"]).total_seconds() < 1800:
-        return _cache["df"], _cache["err"]
-    df, err = _fetch_qa_data_fresh()
-    if not df.empty:
-        st.session_state["_qa_data_ss_cache"] = {"df": df, "err": err, "loaded_at": _now}
-        return df, err
     if _cache:
-        # Stale data is better than nothing — return it with the new error
+        _age = (_now - _cache["loaded_at"]).total_seconds()
+        _ttl = 1800 if not _cache["df"].empty else 60
+        if _age < _ttl:
+            return _cache["df"], _cache["err"]
+    df, err = _fetch_qa_data_fresh()
+    # Cache both successes and failures (failures for 60 s only — see TTL logic above)
+    st.session_state["_qa_data_ss_cache"] = {"df": df, "err": err, "loaded_at": _now}
+    if _cache and df.empty:
+        # Stale success data beats a new failure
         return _cache["df"], err
     return df, err
 
