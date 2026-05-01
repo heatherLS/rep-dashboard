@@ -1206,8 +1206,9 @@ def _fetch_qa_data_fresh() -> tuple:
             _sa, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
         )
         _session = _req.Session()
-        # timeout= on GARequest controls the token-exchange POST (no functools.partial conflict)
-        _creds.refresh(GARequest(session=_session, timeout=20))
+        # No timeout= on GARequest constructor — older google-auth versions don't support it.
+        # The data fetch below has explicit timeout; auth token exchange is typically <2s.
+        _creds.refresh(GARequest(session=_session))
         _hdrs = {"Authorization": f"Bearer {_creds.token}"}
 
         # Step 1: lightweight metadata call to get the GID for the Sales tab
