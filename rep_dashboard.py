@@ -995,6 +995,44 @@ def load_cycle_dates(_cache_bust_key: str):
         pass
     return None, None
 
+@st.cache_data(show_spinner=False, ttl=3600)
+def load_last_cycle_info(_cache_bust_key: str):
+    """Returns dict with most recently completed cycle: dates + goals from col O/P/Q/R/S."""
+    try:
+        _df = pd.read_csv(_CYCLES_GOALS_URL, header=None, dtype=str).fillna("")
+        _today = datetime.now().date()
+        _best = None
+        for _ri in range(2, len(_df)):
+            _cs = str(_df.iat[_ri, 14]).strip()  # col O = Cycle range string
+            if not _cs or ' - ' not in _cs:
+                continue
+            _parts = _cs.split(' - ')
+            if len(_parts) != 2:
+                continue
+            _s = pd.to_datetime(_parts[0].strip(), errors='coerce')
+            _e = pd.to_datetime(_parts[1].strip(), errors='coerce')
+            if pd.isna(_s) or pd.isna(_e):
+                continue
+            _sd, _ed = _s.date(), _e.date()
+            if _ed < _today and (_best is None or _ed > _best['end']):
+                def _pv(v):
+                    try:
+                        return float(str(v).replace('%', '').strip())
+                    except Exception:
+                        return None
+                _best = {
+                    'cycle_str':   _cs,
+                    'start':       _sd,
+                    'end':         _ed,
+                    'conv_goal':   _pv(_df.iat[_ri, 15]),  # P = Conversion
+                    'attach_goal': _pv(_df.iat[_ri, 16]),  # Q = Attach
+                    'lt_goal':     _pv(_df.iat[_ri, 17]),  # R = LT
+                    'qa_goal':     _pv(_df.iat[_ri, 18]),  # S = QA
+                }
+        return _best
+    except Exception:
+        return None
+
 def _rep_qa_for_cycle(qa_df, agent_name: str, cycle_start, cycle_end):
     """Average New Score for agent where Scoring Week falls in [cycle_start, cycle_end]."""
     if qa_df is None or qa_df.empty or not agent_name or not cycle_start:
@@ -2592,6 +2630,102 @@ if page == "💰Bonus & History":
                 f"🚨 {first}, none of the 3 qualifiers are met yet — "
                 f"let's focus on Conversion first, then All-In Attach and QA. You've got this!"
             )
+
+        # ── LAST CYCLE RECAP ──────────────────────────────────────────────────
+        st.markdown("---")
+        _lc_info = load_last_cycle_info(cache_bust_key)
+        if _lc_info:
+            st.subheader(f"🔁 Last Cycle Recap  ·  {_lc_info['cycle_str']}")
+            st.caption("QA scores are graded one week after the cycle ends — this shows your finalized numbers for the previous cycle.")
+
+            # QA for last cycle from observations
+            _lc_qa_val = None
+            _lc_qa_raw, _ = load_qa_data(cache_bust_key)
+            if not _lc_qa_raw.empty:
+                _lc_brn = f"{str(row.get('First_Name','')).strip()} {str(row.get('Last_Name','')).strip()}".strip()
+                _lc_canon = load_teams_new_names(cache_bust_key).get(_lc_brn.lower(), _lc_brn)
+                _lc_qa_val = _rep_qa_for_cycle(_lc_qa_raw, _lc_canon, _lc_info['start'], _lc_info['end'])
+
+            # Conversion + Attach for last cycle from history sheet
+            _lc_hist = load_history(cache_bust_key).copy()
+            _lc_hist.columns = _lc_hist.columns.str.strip()
+            _lc_hist['Date'] = pd.to_datetime(_lc_hist.get('Date', pd.Series(dtype=str)), errors='coerce')
+            _lc_rep_hist = _lc_hist[
+                (_lc_hist['Rep'].astype(str).str.lower().str.strip() == email.strip().lower()) &
+                (_lc_hist['Date'].dt.date >= _lc_info['start']) &
+                (_lc_hist['Date'].dt.date <= _lc_info['end'])
+            ]
+            _lc_calls = pd.to_numeric(_lc_rep_hist['Calls'],  errors='coerce').fillna(0).sum() if 'Calls'  in _lc_rep_hist.columns else 0
+            _lc_wins  = pd.to_numeric(_lc_rep_hist['Wins'],   errors='coerce').fillna(0).sum() if 'Wins'   in _lc_rep_hist.columns else 0
+            _lc_conv  = (_lc_wins / _lc_calls * 100) if _lc_calls > 0 else None
+
+            _lc_attach_svcs = [c for c in ['Lawn Treatment','Mosquito','Bush Trimming','Flower Bed Weeding','Leaf Removal','Pool'] if c in _lc_rep_hist.columns]
+            _lc_total_attach = sum(pd.to_numeric(_lc_rep_hist[c], errors='coerce').fillna(0).sum() for c in _lc_attach_svcs)
+            _lc_attach = (_lc_total_attach / _lc_wins * 100) if _lc_wins > 0 else None
+
+            _lc_metrics = {
+                'Conversion':    _lc_conv   if _lc_conv   is not None else 0.0,
+                'All-In Attach': _lc_attach if _lc_attach is not None else 0.0,
+                'QA':            _lc_qa_val if _lc_qa_val is not None else 0.0,
+            }
+            _lc_pts = {
+                'Conversion':    get_points(_lc_metrics['Conversion'],    conversion_tiers),
+                'All-In Attach': get_points(_lc_metrics['All-In Attach'], attach_tiers),
+                'QA':            get_points(_lc_metrics['QA'],            qa_tiers),
+            }
+            _lc_total = sum(_lc_pts.values())
+
+            st.markdown(
+                f"**Total Points: {_lc_total}** "
+                f"*(Conv: {_lc_pts['Conversion']} + Attach: {_lc_pts['All-In Attach']} + QA: {_lc_pts['QA']})*"
+            )
+
+            _lc_goals = {
+                'Conversion':    _lc_info.get('conv_goal'),
+                'All-In Attach': _lc_info.get('attach_goal'),
+                'QA':            _lc_info.get('qa_goal'),
+            }
+
+            _lc_cols = st.columns(3)
+            for _li, _lk in enumerate(['Conversion', 'All-In Attach', 'QA']):
+                _lv   = _lc_metrics[_lk]
+                _lg   = _lc_goals.get(_lk)
+                _lpts = _lc_pts[_lk]
+                _lmet = (_lg is not None and _lv >= _lg)
+                _lno_data = (
+                    (_lk == 'QA' and _lc_qa_val is None) or
+                    (_lk in ('Conversion', 'All-In Attach') and _lc_calls == 0)
+                )
+                _lg_str = f"{_lg:.0f}% goal" if _lg is not None else "no goal set"
+                with _lc_cols[_li]:
+                    if _lno_data:
+                        st.markdown(
+                            f"<div style='border:1px solid #444;border-radius:10px;padding:12px;text-align:center;'>"
+                            f"<div style='font-weight:700;'>{_lk}</div>"
+                            f"<div style='font-size:22px;'>—</div>"
+                            f"<div style='font-size:12px;color:#888;'>No data this cycle</div>"
+                            f"</div>", unsafe_allow_html=True
+                        )
+                    elif _lmet:
+                        st.markdown(
+                            f"<div style='background:rgba(34,197,94,0.12);border:2px solid #22c55e;border-radius:10px;padding:12px;text-align:center;'>"
+                            f"<div style='font-weight:700;'>{_lk}</div>"
+                            f"<div style='font-size:22px;font-weight:900;color:#22c55e;'>{_lv:.1f}%</div>"
+                            f"<div style='font-size:12px;color:#22c55e;'>✅ {_lpts} pt(s) · {_lg_str}</div>"
+                            f"</div>", unsafe_allow_html=True
+                        )
+                    else:
+                        _lgap = (_lg - _lv) if _lg is not None else 0
+                        st.markdown(
+                            f"<div style='background:rgba(239,68,68,0.10);border:2px solid #ef4444;border-radius:10px;padding:12px;text-align:center;'>"
+                            f"<div style='font-weight:700;'>{_lk}</div>"
+                            f"<div style='font-size:22px;font-weight:900;color:#ef4444;'>{_lv:.1f}%</div>"
+                            f"<div style='font-size:12px;color:#ef4444;'>❌ {_lpts} pt(s) · {_lgap:.1f}% below {_lg_str}</div>"
+                            f"</div>", unsafe_allow_html=True
+                        )
+            st.markdown("<br>", unsafe_allow_html=True)
+        else:
+            st.caption("Last cycle data unavailable.")
 
     # 🏅 Personal Bests Section
     st.markdown("### 🏅 Personal Bests")
