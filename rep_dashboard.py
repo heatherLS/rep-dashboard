@@ -1195,9 +1195,8 @@ def load_teams_new_names(_cache_bust_key: str) -> dict:
         return {}
 
 def _fetch_qa_data_fresh() -> tuple:
-    """Fetch QA data. Token refresh and HTTP fetch each have explicit timeouts."""
+    """Fetch QA data via Sheets API JSON endpoint with explicit per-call timeouts."""
     import requests as _req
-    import io as _io
     from google.oauth2.service_account import Credentials as SACredentials
     from google.auth.transport.requests import Request as GARequest
     try:
@@ -1206,36 +1205,24 @@ def _fetch_qa_data_fresh() -> tuple:
             _sa, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
         )
         _session = _req.Session()
-        # No timeout= on GARequest constructor — older google-auth versions don't support it.
-        # The data fetch below has explicit timeout; auth token exchange is typically <2s.
+        # GARequest constructor has no timeout kwarg in older google-auth — don't pass it.
         _creds.refresh(GARequest(session=_session))
         _hdrs = {"Authorization": f"Bearer {_creds.token}"}
 
-        # Step 1: lightweight metadata call to get the GID for the Sales tab
-        _meta_url = (
+        # Sheets API /values endpoint accepts service-account Bearer tokens (unlike /export).
+        # timeout=(connect_s, read_s) — 5s to connect, 45s to receive full response.
+        _api_url = (
             f"https://sheets.googleapis.com/v4/spreadsheets/{_QA_SHEET_ID}"
-            f"?fields=sheets.properties"
+            f"/values/{_QA_SHEET_TAB}"
         )
-        _meta = _session.get(_meta_url, headers=_hdrs, timeout=(5, 10)).json()
-        _gid = next(
-            (s["properties"]["sheetId"] for s in _meta.get("sheets", [])
-             if s.get("properties", {}).get("title") == _QA_SHEET_TAB),
-            None,
-        )
-        if _gid is None:
-            return pd.DataFrame(), f"Tab '{_QA_SHEET_TAB}' not found in spreadsheet"
-
-        # Step 2: fetch as CSV (much smaller than JSON — no per-row type overhead)
-        _csv_url = (
-            f"https://docs.google.com/spreadsheets/d/{_QA_SHEET_ID}"
-            f"/export?format=csv&gid={_gid}"
-        )
-        _resp = _session.get(_csv_url, headers=_hdrs, timeout=(5, 45))
+        _resp = _session.get(_api_url, headers=_hdrs, timeout=(5, 45))
         _resp.raise_for_status()
-
-        df = pd.read_csv(_io.StringIO(_resp.text))
-        if df.empty:
+        _values = _resp.json().get("values", [])
+        if len(_values) < 2:
             return pd.DataFrame(), "Sheet returned no data rows"
+        _headers = _values[0]
+        _rows = [r + [""] * (len(_headers) - len(r)) for r in _values[1:]]
+        df = pd.DataFrame(_rows, columns=_headers)
         df.columns = [re.sub(r'\s+', ' ', c).strip() for c in df.columns]
         df['_ts'] = pd.to_datetime(df.get('Timestamp', pd.Series(dtype=str)), errors='coerce')
         df['_scoring_week'] = pd.to_datetime(df.get('Scoring Week', pd.Series(dtype=str)), errors='coerce')
