@@ -6,13 +6,13 @@ Pulls daily per-rep metrics from Redshift and writes to data/rep_history.csv.
 
 Metrics pulled:
   - Wins           → bi_lawnstarter_production.orders (closing_user_id)
-  - Lawn Treatment → dw_silver.fct_schedules + orders join
-  - Mosquito       → dw_silver.fct_schedules + orders join
-  - Bush Trimming  → bi_lawnstarter_production.instant_quotes (creating_user_id)
-  - Flower Bed Weeding → bi_lawnstarter_production.instant_quotes
-  - Leaf Removal   → bi_lawnstarter_production.instant_quotes
-  - Pool           → five9.five_9_call_logs_v_3 (T+1 only)
-  - Calls          → five9.five_9_call_logs_v_3
+  - Lawn Treatment → dw_gold.fct_instant_quotes_agent_agg (rep-sold attaches only, all brands)
+  - Mosquito       → dw_gold.fct_instant_quotes_agent_agg
+  - Bush Trimming  → dw_gold.fct_instant_quotes_agent_agg
+  - Flower Bed Weeding → dw_gold.fct_instant_quotes_agent_agg
+  - Leaf Removal   → dw_gold.fct_instant_quotes_agent_agg
+  - Pool           → five9.five_9_call_logs_v_3 (same-day if Five9 syncs intraday)
+  - Calls          → five9.five_9_call_logs_v_3 (T+1 only)
 
 Prerequisites:
   - Teleport proxy running on port 55756:
@@ -42,6 +42,13 @@ REDSHIFT_USER = "analytics_read_only"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 OUTPUT_CSV = os.path.join(PROJECT_DIR, "data", "rep_history.csv")
+
+# New hire onboarding sheet: class date (A), rep email (E), new manager (G)
+NEW_HIRE_SHEET_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1oO8WVlAHezisAfiN5Qzm12rJ_G3hGHUgIgfFdX6OIDE"
+    "/export?format=csv&gid=1362600342"
+)
 
 # ---------------------------------------------------------------------------
 # Connection
@@ -81,42 +88,24 @@ WHERE u.is_admin = 1
 GROUP BY 1, 2, 3, 4
 """
 
-SCHEDULE_ATTACHES_SQL = """
+ATTACH_SQL = """
 SELECT
-    CAST(CONVERT_TIMEZONE('UTC', 'America/Chicago', fs.created_at) AS DATE) AS date,
-    u.email                             AS rep,
-    SUM(CASE WHEN fs.service_name ILIKE '%Lawn Treatment%'  THEN 1 ELSE 0 END) AS lawn_treatment,
-    SUM(CASE WHEN fs.service_name ILIKE '%Mosquito%'        THEN 1 ELSE 0 END) AS mosquito
-FROM dw_silver.fct_schedules fs
-JOIN bi_lawnstarter_production.orders o ON fs.order_id = o.id
-JOIN bi_lawnstarter_production.users  u ON o.closing_user_id = u.id
-WHERE u.is_admin = 1
-  AND u.email ILIKE '%@lawnstarter.com%'
-  AND fs.order_id IS NOT NULL
+    customer_created_at_day                         AS date,
+    lawnstarter_email                               AS rep,
+    SUM(distinct_lawn_treatment_attaches)           AS lawn_treatment,
+    SUM(distinct_mosquito_attaches)                 AS mosquito,
+    SUM(distinct_bush_trimming_attaches)            AS bush_trimming,
+    SUM(distinct_flower_bed_weeding_attaches)       AS flower_bed_weeding,
+    SUM(distinct_leaf_removal_attaches)             AS leaf_removal
+FROM dw_gold.fct_instant_quotes_agent_agg
+WHERE lawnstarter_email ILIKE '%@lawnstarter.com%'
   {date_filter}
 GROUP BY 1, 2
-HAVING SUM(CASE WHEN fs.service_name ILIKE '%Lawn Treatment%' THEN 1 ELSE 0 END) > 0
-    OR SUM(CASE WHEN fs.service_name ILIKE '%Mosquito%'        THEN 1 ELSE 0 END) > 0
-"""
-
-IQ_ATTACHES_SQL = """
-SELECT
-    CAST(CONVERT_TIMEZONE('UTC', 'America/Chicago', iq.created_at) AS DATE) AS date,
-    u.email                             AS rep,
-    SUM(CASE WHEN iq.instant_quotable_type = 'App\\\\InstantQuoteBushTrimming'   THEN 1 ELSE 0 END) AS bush_trimming,
-    SUM(CASE WHEN iq.instant_quotable_type = 'App\\\\InstantQuoteFlowerBedWeeding' THEN 1 ELSE 0 END) AS flower_bed_weeding,
-    SUM(CASE WHEN iq.instant_quotable_type = 'App\\\\InstantQuoteLeafRemoval'    THEN 1 ELSE 0 END) AS leaf_removal
-FROM bi_lawnstarter_production.instant_quotes iq
-JOIN bi_lawnstarter_production.users          u ON iq.creating_user_id = u.id
-WHERE iq.instant_quote_status IN ('completed', 'contractor.accepted', 'contractor.pending')
-  AND iq._fivetran_deleted = false
-  AND u.is_admin = 1
-  AND u.email ILIKE '%@lawnstarter.com%'
-  {date_filter}
-GROUP BY 1, 2
-HAVING SUM(CASE WHEN iq.instant_quotable_type = 'App\\\\InstantQuoteBushTrimming'     THEN 1 ELSE 0 END) > 0
-    OR SUM(CASE WHEN iq.instant_quotable_type = 'App\\\\InstantQuoteFlowerBedWeeding' THEN 1 ELSE 0 END) > 0
-    OR SUM(CASE WHEN iq.instant_quotable_type = 'App\\\\InstantQuoteLeafRemoval'      THEN 1 ELSE 0 END) > 0
+HAVING SUM(distinct_lawn_treatment_attaches)     > 0
+    OR SUM(distinct_mosquito_attaches)           > 0
+    OR SUM(distinct_bush_trimming_attaches)      > 0
+    OR SUM(distinct_flower_bed_weeding_attaches) > 0
+    OR SUM(distinct_leaf_removal_attaches)       > 0
 """
 
 POOL_SQL = """
@@ -203,15 +192,22 @@ def update_repdata_from_roster(sr, sh):
     import gspread as _gspread
 
     # --- TL_TeamMap: Manager_Direct → Team_Name ---
+    # Index both "Last, First" (col A, roster format) and "First Last" (RepData format)
+    # so lookups succeed regardless of which format the caller is using.
     tl_map = {}
     try:
         tl_ws = sh.worksheet("TL_TeamMap")
         for row in tl_ws.get_all_records():
             mgr = str(row.get('Manager_Direct', '')).strip()
             team = str(row.get('Team_Name', '')).strip()
-            if mgr:
-                tl_map[mgr] = team
-        print(f"  TL_TeamMap: {len(tl_map)} entries loaded")
+            if not mgr or not team:
+                continue
+            tl_map[mgr] = team  # "Last, First" — for SalesRoster matching
+            if ',' in mgr:
+                # Also store as "First Last" — matches RepData's Manager_Direct (col G)
+                last, first = mgr.split(',', 1)
+                tl_map[f"{first.strip()} {last.strip()}"] = team
+        print(f"  TL_TeamMap: {len(tl_map)} entries loaded ({len(tl_map) // 2} managers)")
     except _gspread.exceptions.WorksheetNotFound:
         print("  TL_TeamMap tab not found — Team Name will be blank for new reps")
 
@@ -320,6 +316,61 @@ def update_repdata_from_roster(sr, sh):
         rd_ws.append_rows(new_rows, value_input_option='USER_ENTERED')
         print(f"  RepData: {len(new_rows)} rep(s) added with formulas")
 
+    # --- Backfill Team Name for existing reps missing it ---
+    # Runs every sync so reps added before TL_TeamMap existed get their team filled in.
+    if tl_map and 'Team Name' in col and 'Manager_Direct' in col:
+        team_updates = []
+        mgr_cidx  = col['Manager_Direct']
+        team_cidx = col['Team Name']
+        for i, row in enumerate(data_rows):
+            if len(row) <= rep_idx:
+                continue
+            current_team = row[team_cidx] if len(row) > team_cidx else ''
+            if current_team.strip():
+                continue  # already has a team — don't overwrite
+            mgr = row[mgr_cidx].strip() if len(row) > mgr_cidx else ''
+            new_team = tl_map.get(mgr, '')
+            if new_team:
+                sheet_row = header_row_idx + 1 + i + 1  # 1-indexed
+                team_updates.append({
+                    'range': _rowcol_to_a1(sheet_row, team_cidx + 1),
+                    'values': [[new_team]],
+                })
+        if team_updates:
+            rd_ws.batch_update(team_updates)
+            print(f"  RepData: backfilled Team Name for {len(team_updates)} rep(s)")
+        else:
+            print("  RepData: Team Name already populated for all reps")
+
+    # --- New hire 30-day override: move eligible reps to their assigned team ---
+    # Runs every sync. Overwrites Team ABC for reps whose class date is >= 30 days ago.
+    if 'Team Name' in col:
+        new_hire_overrides = load_new_hire_overrides()
+        if new_hire_overrides:
+            team_cidx = col['Team Name']
+            override_updates = []
+            for i, row in enumerate(data_rows):
+                if len(row) <= rep_idx:
+                    continue
+                email = row[rep_idx].lower().strip()
+                if email not in new_hire_overrides:
+                    continue
+                new_mgr = new_hire_overrides[email]
+                new_team = tl_map.get(new_mgr, '')
+                if not new_team:
+                    continue
+                current_team = row[team_cidx] if len(row) > team_cidx else ''
+                if current_team.strip() == new_team:
+                    continue  # already correct
+                sheet_row = header_row_idx + 1 + i + 1
+                override_updates.append({
+                    'range': _rowcol_to_a1(sheet_row, team_cidx + 1),
+                    'values': [[new_team]],
+                })
+            if override_updates:
+                rd_ws.batch_update(override_updates)
+                print(f"  RepData: applied new hire team override for {len(override_updates)} rep(s)")
+
     # --- Backfill Birthday / Start_Date for existing reps missing them ---
     if birthday_map:
         updates = []
@@ -344,6 +395,40 @@ def update_repdata_from_roster(sr, sh):
         if updates:
             rd_ws.batch_update(updates)
             print(f"  RepData: backfilled {len(updates)} birthday/start date(s)")
+
+
+# ---------------------------------------------------------------------------
+# New hire team override
+# ---------------------------------------------------------------------------
+
+def load_new_hire_overrides() -> dict:
+    """
+    Returns {rep_email_lower: new_manager} for new hires who are >= 30 days
+    past their class date. These reps still report to Katie (Team ABC) in the
+    roster, but the dashboard should show them under their assigned new team.
+
+    Sheet columns (0-indexed): A=0 class date, E=4 rep email, G=6 new manager.
+    """
+    try:
+        df = pd.read_csv(NEW_HIRE_SHEET_URL, header=0)
+        # Pull by position so header label changes don't break this
+        df = df.iloc[:, [0, 4, 6]].copy()
+        df.columns = ['class_date', 'email', 'new_manager']
+        df = df[df['email'].notna() & (df['email'].astype(str).str.strip() != '')].copy()
+        df['class_date'] = pd.to_datetime(df['class_date'], errors='coerce')
+        df = df[df['class_date'].notna()]
+        cutoff = pd.Timestamp(date.today()) - pd.Timedelta(days=30)
+        eligible = df[df['class_date'] <= cutoff]
+        overrides = {
+            row['email'].lower().strip(): str(row['new_manager']).strip()
+            for _, row in eligible.iterrows()
+            if pd.notna(row['new_manager']) and str(row['new_manager']).strip()
+        }
+        print(f"  New hire overrides: {len(overrides)} rep(s) past 30-day mark")
+        return overrides
+    except Exception as e:
+        print(f"  Warning: could not load new hire overrides ({e})")
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -379,26 +464,24 @@ def sync(today_only: bool = False):
     wins_sql = WINS_SQL.format(date_filter=date_filter_clause(start, end, col="CAST(CONVERT_TIMEZONE('UTC', 'America/Chicago', o.created_at) AS DATE)"))
     wins_df = run_query(conn, wins_sql)
 
-    # --- Schedule attaches (LT + Mosquito) ---
-    print("  Fetching Lawn Treatment + Mosquito...")
-    sched_sql = SCHEDULE_ATTACHES_SQL.format(date_filter=date_filter_clause(start, end, col="CAST(CONVERT_TIMEZONE('UTC', 'America/Chicago', fs.created_at) AS DATE)"))
-    sched_df = run_query(conn, sched_sql)
+    # --- Attaches (all services) via fct_instant_quotes_agent_agg ---
+    # Covers all 3 brands; only counts rep-sold attaches at time of close (not customer self-adds).
+    print("  Fetching attaches (LT, Mosquito, Bush, Flower Bed, Leaf — all brands)...")
+    attach_sql = ATTACH_SQL.format(date_filter=date_filter_clause(start, end, col="customer_created_at_day"))
+    attach_df = run_query(conn, attach_sql)
 
-    # --- IQ attaches (Bush, Flower, Leaf) ---
-    print("  Fetching IQ attaches (Bush, Flower, Leaf)...")
-    iq_sql = IQ_ATTACHES_SQL.format(date_filter=date_filter_clause(start, end, col="CAST(CONVERT_TIMEZONE('UTC', 'America/Chicago', iq.created_at) AS DATE)"))
-    iq_df = run_query(conn, iq_sql)
-
-    # --- Pool (Five9, T+1) ---
+    # --- Pool (Five9) ---
     print("  Fetching Pool (Five9)...")
-    # Pool only available through yesterday
-    pool_end = yesterday
-    pool_sql = POOL_SQL.format(date_filter=date_filter_five9(start, pool_end))
+    # Extend to today — Five9 may sync intraday so same-day wins are catchable.
+    # If today's data isn't in Redshift yet, this simply returns 0 rows for today.
+    pool_sql = POOL_SQL.format(date_filter=date_filter_five9(start, end))
     pool_df = run_query(conn, pool_sql)
 
-    # --- Calls (Five9) ---
+    # --- Calls (Five9, T+1) ---
+    # Five9 call counts lag ~1 day in Redshift; cap at yesterday to avoid
+    # overwriting accurate historical counts with incomplete same-day zeros.
     print("  Fetching Calls (Five9)...")
-    calls_sql = CALLS_SQL.format(date_filter=date_filter_five9(start, pool_end))
+    calls_sql = CALLS_SQL.format(date_filter=date_filter_five9(start, yesterday))
     calls_df = run_query(conn, calls_sql)
 
     conn.close()
@@ -460,6 +543,20 @@ def sync(today_only: bool = False):
             roster_map['Manager_Direct'].map(mgr_to_team)
         )
 
+        # New hire 30-day rule: reps still reporting to Katie (Team ABC) but
+        # past their 30-day mark should show under their assigned new team.
+        new_hire_overrides = load_new_hire_overrides()
+        if new_hire_overrides:
+            def _apply_new_hire_team(row):
+                email = str(row.get('rep_key', '')).lower().strip()
+                if email in new_hire_overrides:
+                    new_mgr = new_hire_overrides[email]
+                    new_team = mgr_to_team.get(new_mgr)
+                    if new_team:
+                        row['Team Name'] = new_team
+                return row
+            roster_map = roster_map.apply(_apply_new_hire_team, axis=1)
+
     except Exception as e:
         print(f"  Warning: could not load roster ({e}). Team Name will be 'Unknown', no name fallback.")
         roster_map = pd.DataFrame(columns=['rep_key', 'First_Name', 'Last_Name', 'Team Name', 'Manager_Direct'])
@@ -471,7 +568,7 @@ def sync(today_only: bool = False):
     print("  Merging datasets...")
 
     # Normalize email to lowercase
-    for df in [wins_df, sched_df, iq_df, pool_df, calls_df]:
+    for df in [wins_df, attach_df, pool_df, calls_df]:
         if 'rep' in df.columns:
             df['rep'] = df['rep'].str.lower().str.strip()
 
@@ -484,16 +581,11 @@ def sync(today_only: bool = False):
         'wins': 'Wins',
     })
 
-    sched_df = sched_df.rename(columns={
+    attach_df = attach_df.rename(columns={
         'date': 'Date',
         'rep': 'Rep',
         'lawn_treatment': 'Lawn Treatment',
         'mosquito': 'Mosquito',
-    })
-
-    iq_df = iq_df.rename(columns={
-        'date': 'Date',
-        'rep': 'Rep',
         'bush_trimming': 'Bush Trimming',
         'flower_bed_weeding': 'Flower Bed Weeding',
         'leaf_removal': 'Leaf Removal',
@@ -506,8 +598,7 @@ def sync(today_only: bool = False):
     spine_parts = []
     for df, name_col in [
         (wins_df, None),
-        (sched_df, None),
-        (iq_df, None),
+        (attach_df, None),
         (pool_df, None),
         (calls_df, None),
     ]:
@@ -529,10 +620,10 @@ def sync(today_only: bool = False):
 
     # Merge each metric
     merged = spine.merge(wins_df[['Date', 'Rep', 'Wins']], on=['Date', 'Rep'], how='left')
-    merged = merged.merge(sched_df[['Date', 'Rep', 'Lawn Treatment', 'Mosquito']],
-                          on=['Date', 'Rep'], how='left')
-    merged = merged.merge(iq_df[['Date', 'Rep', 'Bush Trimming', 'Flower Bed Weeding', 'Leaf Removal']],
-                          on=['Date', 'Rep'], how='left')
+    merged = merged.merge(
+        attach_df[['Date', 'Rep', 'Lawn Treatment', 'Mosquito', 'Bush Trimming', 'Flower Bed Weeding', 'Leaf Removal']],
+        on=['Date', 'Rep'], how='left'
+    )
     merged = merged.merge(pool_df[['Date', 'Rep', 'Pool']], on=['Date', 'Rep'], how='left')
     merged = merged.merge(calls_df[['Date', 'Rep', 'Calls']], on=['Date', 'Rep'], how='left')
 
