@@ -2528,21 +2528,7 @@ if page == "💰Bonus & History":
                 if _bqa_obs is not None:
                     _bonus_qa_val = _bqa_obs
 
-        metrics = {
-            'Conversion': percent(row.get('BonusConversion', 0)),
-            'All-In Attach': percent(row.get('BonusAllinAttach', 0)),
-            'QA': _bonus_qa_val,
-        }
-
-        points = {
-            'Conversion': get_points(metrics['Conversion'], conversion_tiers),
-            'All-In Attach': get_points(metrics['All-In Attach'], attach_tiers),
-            'QA': get_points(metrics['QA'], qa_tiers)
-        }
-
-        _bonus_total_pts = sum(points.values())
-
-        # Cycle-to-date raw counts from history sheet
+        # Cycle-to-date raw counts from history sheet (source of truth for attach)
         _cy_hist = load_history(cache_bust_key).copy()
         _cy_hist.columns = _cy_hist.columns.str.strip()
         _cy_hist['Date'] = pd.to_datetime(_cy_hist.get('Date', pd.Series(dtype=str)), errors='coerce')
@@ -2566,6 +2552,21 @@ if page == "💰Bonus & History":
                                     'Flower Bed Weeding', 'Leaf Removal', 'Pool']
                        if c in _cy_rep.columns]
         _cy_attach = int(sum(_cy_rep[c].sum() for c in _cy_att_svc))
+        _cy_attach_pct = (_cy_attach / _cy_wins * 100) if _cy_wins > 0 else 0.0
+
+        metrics = {
+            'Conversion': percent(row.get('BonusConversion', 0)),
+            'All-In Attach': _cy_attach_pct,
+            'QA': _bonus_qa_val,
+        }
+
+        points = {
+            'Conversion': get_points(metrics['Conversion'], conversion_tiers),
+            'All-In Attach': get_points(metrics['All-In Attach'], attach_tiers),
+            'QA': get_points(metrics['QA'], qa_tiers)
+        }
+
+        _bonus_total_pts = sum(points.values())
 
         st.subheader(f"🧑‍🌾 Growth Stats for {row.get('First_Name', viewed_first)}")
         _cnt1, _cnt2, _cnt3 = st.columns(3)
