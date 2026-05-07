@@ -1615,7 +1615,10 @@ if page == "📊 Leaderboard":
             Total_Wins=("Wins", "sum")
         ).reset_index()
 
-        team_totals['Conversion'] = (team_totals['Total_Wins'] / team_totals['Total_Calls']) * 100
+        team_totals['Conversion'] = team_totals.apply(
+        lambda r: (r['Total_Wins'] / r['Total_Calls'] * 100) if r['Total_Calls'] > 0 else 0.0,
+        axis=1
+    )
         team_totals['Rank'] = team_totals['Conversion'].rank(ascending=False, method='min').astype(int)
 
         if team_name in team_totals['Team Name'].values:
@@ -1845,7 +1848,10 @@ if page == "📊 Leaderboard":
         Total_Wins=("Wins", "sum")
     ).reset_index()
 
-    team_totals['Conversion'] = (team_totals['Total_Wins'] / team_totals['Total_Calls']) * 100
+    team_totals['Conversion'] = team_totals.apply(
+        lambda r: (r['Total_Wins'] / r['Total_Calls'] * 100) if r['Total_Calls'] > 0 else 0.0,
+        axis=1
+    )
 
     # Require a minimum number of calls so a team with 1 win / 1 call doesn't top the board
     MIN_TEAM_CALLS = 5
@@ -3074,7 +3080,10 @@ if page == "📅 Yesterday":
         Total_Calls=("Calls", "sum"),
         Total_Wins=("Wins", "sum")
     ).reset_index()
-    team_totals['Conversion'] = (team_totals['Total_Wins'] / team_totals['Total_Calls']) * 100
+    team_totals['Conversion'] = team_totals.apply(
+        lambda r: (r['Total_Wins'] / r['Total_Calls'] * 100) if r['Total_Calls'] > 0 else 0.0,
+        axis=1
+    )
     team_totals['Rank'] = team_totals['Conversion'].rank(ascending=False, method='min').astype(int)
 
     if team_name:
@@ -3363,7 +3372,10 @@ if page == "👩‍💻 Team Lead Dashboard":
         Total_Calls=("Calls", "sum"),
         Total_Wins=("Wins", "sum")
     ).reset_index()
-    team_totals['Conversion'] = (team_totals['Total_Wins'] / team_totals['Total_Calls']) * 100
+    team_totals['Conversion'] = team_totals.apply(
+        lambda r: (r['Total_Wins'] / r['Total_Calls'] * 100) if r['Total_Calls'] > 0 else 0.0,
+        axis=1
+    )
     team_totals['Rank'] = team_totals['Conversion'].rank(ascending=False, method='min').astype(int)
 
     # Extract this team's rank
