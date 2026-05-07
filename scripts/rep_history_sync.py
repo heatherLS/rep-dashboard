@@ -594,6 +594,11 @@ def sync(today_only: bool = False):
     pool_df = pool_df.rename(columns={'date': 'Date', 'rep': 'Rep', 'pool': 'Pool'})
     calls_df = calls_df.rename(columns={'date': 'Date', 'rep': 'Rep', 'calls': 'Calls'})
 
+    # Normalize all Date columns to datetime64 so merges don't fail on type mismatch
+    for df in [wins_df, attach_df, pool_df, calls_df]:
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+
     # Build spine as union of all rep/date combos across all sources
     spine_parts = []
     for df, name_col in [
