@@ -88,22 +88,23 @@ WHERE u.is_admin = 1
 GROUP BY 1, 2, 3, 4
 """
 
-# LT + Mosquito: query production tables directly (real-time Fivetran) instead of
-# dw_silver.fct_schedules which is a dbt model rebuilt on a batch schedule.
+# LT + Mosquito: query production tables directly (real-time Fivetran).
+# Chain: order_services -> prices (for service_id) -> services (for name) -> orders -> users
+# This bypasses dw_silver.fct_schedules which is a batch dbt table.
 SCHEDULE_ATTACHES_SQL = """
 SELECT
-    CAST(CONVERT_TIMEZONE('UTC', 'America/Chicago', s.created_at) AS DATE) AS date,
+    CAST(CONVERT_TIMEZONE('UTC', 'America/Chicago', os.created_at) AS DATE) AS date,
     u.email                             AS rep,
     SUM(CASE WHEN svc.name ILIKE '%Lawn Treatment%' THEN 1 ELSE 0 END) AS lawn_treatment,
     SUM(CASE WHEN svc.name ILIKE '%Mosquito%'       THEN 1 ELSE 0 END) AS mosquito
-FROM bi_lawnstarter_production.schedules s
-JOIN bi_lawnstarter_production.services  svc ON svc.id = s.service_id
-JOIN bi_lawnstarter_production.orders    o   ON o.id   = s.order_id
-JOIN bi_lawnstarter_production.users     u   ON u.id   = o.closing_user_id
+FROM bi_lawnstarter_production.order_services os
+JOIN bi_lawnstarter_production.prices         prc ON prc.id  = os.price_id
+JOIN bi_lawnstarter_production.services       svc ON svc.id  = prc.service_id
+JOIN bi_lawnstarter_production.orders         o   ON o.id    = os.order_id
+JOIN bi_lawnstarter_production.users          u   ON u.id    = o.closing_user_id
 WHERE u.is_admin = 1
   AND u.email ILIKE '%@lawnstarter.com%'
-  AND s.order_id IS NOT NULL
-  AND s.deleted_at IS NULL
+  AND os.deleted_at IS NULL
   AND (svc.name ILIKE '%Lawn Treatment%' OR svc.name ILIKE '%Mosquito%')
   {date_filter}
 GROUP BY 1, 2
@@ -491,7 +492,7 @@ def sync(today_only: bool = False):
 
     # --- LT + Mosquito (schedule-based, intraday) ---
     print("  Fetching LT + Mosquito attaches (fct_schedules)...")
-    sched_col = "CAST(CONVERT_TIMEZONE('UTC', 'America/Chicago', fs.created_at) AS DATE)"
+    sched_col = "CAST(CONVERT_TIMEZONE('UTC', 'America/Chicago', os.created_at) AS DATE)"
     sched_sql = SCHEDULE_ATTACHES_SQL.format(date_filter=date_filter_clause(start, end, col=sched_col))
     sched_df = run_query(conn, sched_sql)
 
