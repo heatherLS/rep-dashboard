@@ -228,10 +228,10 @@ _POOL_WIN_CORRECTIONS = {}
 # Set to None to fall back to history automatically.
 # ---------------------------------------------------------------------------
 _POOL_RECORD_OVERRIDE = {
-    "full_name": "Ashley Sagun",
-    "team": "The Cutting Edge",
+    "full_name": "Stephen Tolero",
+    "team": "Lawnminators",
     "value": 2,
-    "date": "Apr 20, 2026",
+    "date": "May 5, 2026",
 }
 
 @st.cache_data(show_spinner=False, ttl=300)
