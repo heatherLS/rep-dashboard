@@ -96,9 +96,11 @@ auth_team   = _safe(auth_row['Team Name'].values[0])      if not auth_row.empty 
 
 is_tl = any(auth_role.startswith(r) for r in TL_ROLES)
 is_sm = any(auth_role.startswith(r) for r in SM_ROLES)
+is_t2 = auth_role.startswith("Tier 2")
 
 # -----------------------------------------------------------------------
-# "View As" — TLs see their team, SMs see everyone, reps see only themselves
+# "View As" — SMs see everyone, TLs see their direct reports,
+#             T2s see all reps under their Team Lead, reps see only themselves
 # -----------------------------------------------------------------------
 if is_sm:
     all_reps = sorted(roster_auth['rep_key'].tolist())
@@ -118,6 +120,15 @@ elif is_tl:
     ]['rep_key'].tolist()
     view_options = [auth_key] + sorted(set(team_reps) - {auth_key})
     view_label   = "👁 Team Lead: View as rep"
+elif is_t2:
+    # T2 leads see all reps whose Manager_Direct matches the T2's own manager
+    # e.g. Elorde Estrebillo reports to "Ebriega, Christine" → sees all of Christine's reps
+    _t2_mgr = auth_mgr.strip().lower()
+    team_reps = roster_auth[
+        roster_auth['Manager_Direct'].str.strip().str.lower() == _t2_mgr
+    ]['rep_key'].tolist()
+    view_options = [auth_key] + sorted(set(team_reps) - {auth_key})
+    view_label   = "👁 T2 Lead: View as rep"
 else:
     view_options = [auth_key]
     view_label   = None
