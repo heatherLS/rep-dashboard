@@ -88,24 +88,27 @@ WHERE u.is_admin = 1
 GROUP BY 1, 2, 3, 4
 """
 
-# LT + Mosquito: date = schedule created_at (rep's closing_user_id on the mowing order)
+# LT + Mosquito: query production tables directly (real-time Fivetran) instead of
+# dw_silver.fct_schedules which is a dbt model rebuilt on a batch schedule.
 SCHEDULE_ATTACHES_SQL = """
 SELECT
-    CAST(CONVERT_TIMEZONE('UTC', 'America/Chicago', fs.created_at) AS DATE) AS date,
+    CAST(CONVERT_TIMEZONE('UTC', 'America/Chicago', s.created_at) AS DATE) AS date,
     u.email                             AS rep,
-    SUM(CASE WHEN fs.service_name ILIKE '%Lawn Treatment%' THEN 1 ELSE 0 END) AS lawn_treatment,
-    SUM(CASE WHEN fs.service_name ILIKE '%Mosquito%'       THEN 1 ELSE 0 END) AS mosquito
-FROM dw_silver.fct_schedules fs
-JOIN bi_lawnstarter_production.orders o ON fs.order_id = o.id
-JOIN bi_lawnstarter_production.users  u ON o.closing_user_id = u.id
+    SUM(CASE WHEN svc.name ILIKE '%Lawn Treatment%' THEN 1 ELSE 0 END) AS lawn_treatment,
+    SUM(CASE WHEN svc.name ILIKE '%Mosquito%'       THEN 1 ELSE 0 END) AS mosquito
+FROM bi_lawnstarter_production.schedules s
+JOIN bi_lawnstarter_production.services  svc ON svc.id = s.service_id
+JOIN bi_lawnstarter_production.orders    o   ON o.id   = s.order_id
+JOIN bi_lawnstarter_production.users     u   ON u.id   = o.closing_user_id
 WHERE u.is_admin = 1
   AND u.email ILIKE '%@lawnstarter.com%'
-  AND fs.order_id IS NOT NULL
-  AND (fs.service_name ILIKE '%Lawn Treatment%' OR fs.service_name ILIKE '%Mosquito%')
+  AND s.order_id IS NOT NULL
+  AND s.deleted_at IS NULL
+  AND (svc.name ILIKE '%Lawn Treatment%' OR svc.name ILIKE '%Mosquito%')
   {date_filter}
 GROUP BY 1, 2
-HAVING SUM(CASE WHEN fs.service_name ILIKE '%Lawn Treatment%' THEN 1 ELSE 0 END) > 0
-    OR SUM(CASE WHEN fs.service_name ILIKE '%Mosquito%'        THEN 1 ELSE 0 END) > 0
+HAVING SUM(CASE WHEN svc.name ILIKE '%Lawn Treatment%' THEN 1 ELSE 0 END) > 0
+    OR SUM(CASE WHEN svc.name ILIKE '%Mosquito%'        THEN 1 ELSE 0 END) > 0
 """
 
 # Bush Trimming / Flower Bed Weeding / Leaf Removal: from instant_quotes with creating_user_id
