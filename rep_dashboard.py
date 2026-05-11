@@ -181,18 +181,20 @@ st.title("🌟 Sales Rep Performance Dashboard")
 # 🔁 Auto-refresh every 5 minutes to match Five9 report cadence
 st_autorefresh(interval=300000, key="datarefresh")
 
-page = st.selectbox(
-    "Choose a page",
-    [
-        "📊 Leaderboard",
-        "🧮 Calculator",
-        "💰Bonus & History",
-        "📅 Yesterday",
-        "👩‍💻 Team Lead Dashboard",
-        "Senior Manager View",
-        "📋 My QA",
-    ]
-)
+_base_pages = [
+    "📊 Leaderboard",
+    "🧮 Calculator",
+    "💰Bonus & History",
+    "📅 Yesterday",
+    "📋 My QA",
+]
+_available_pages = _base_pages[:]
+if is_tl or is_sm:
+    _available_pages.append("👩‍💻 Team Lead Dashboard")
+if is_sm:
+    _available_pages.append("Senior Manager View")
+
+page = st.selectbox("Choose a page", _available_pages)
 
 # ---- Shared Config ----
 sheet_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=171451260"
@@ -3941,9 +3943,184 @@ if page == "👩‍💻 Team Lead Dashboard":
                 if _rep_rows:
                     st.dataframe(pd.DataFrame(_rep_rows), use_container_width=True, hide_index=True)
 
-        # Placeholder Sections
-        st.subheader("🏆 Personal Bests (Coming Soon)")
-        st.subheader("⚔️ Compare With Another Team (Coming Soon)")
+        # ──────────────────────────────────────────────
+        # 📊 HALF-MONTH PERFORMANCE REVIEW (PIP)
+        # ──────────────────────────────────────────────
+        st.markdown("---")
+        st.subheader("📊 Half-Month Performance Review")
+
+        import calendar as _cal
+
+        def _pip_label(d):
+            if pd.isna(d): return None
+            last = _cal.monthrange(d.year, d.month)[1]
+            half = "1-15" if d.day <= 15 else f"16-{last}"
+            return f"{d.strftime('%b')} {half} {d.year}"
+
+        def _pip_sort(lbl):
+            if not lbl: return (0, 0, 0)
+            p = lbl.split()
+            _mm = {'Jan':1,'Feb':2,'Mar':3,'Apr':4,'May':5,'Jun':6,
+                   'Jul':7,'Aug':8,'Sep':9,'Oct':10,'Nov':11,'Dec':12}
+            return (int(p[2]), _mm.get(p[0], 0), 0 if p[1].startswith('1') else 1)
+
+        # Filter history to this team
+        _pip_h = history_df[
+            history_df['Manager_Direct'].str.strip().str.lower() == selected_lead.strip().lower()
+        ].copy()
+        _pip_h['Date'] = pd.to_datetime(_pip_h['Date'], errors='coerce')
+        for _pc in ['Wins','Calls','Lawn Treatment','Mosquito','Bush Trimming','Flower Bed Weeding','Leaf Removal']:
+            _pip_h[_pc] = pd.to_numeric(_pip_h[_pc], errors='coerce').fillna(0)
+        _pip_h['_period'] = _pip_h['Date'].apply(_pip_label)
+
+        _pip_all_periods = sorted(
+            [p for p in _pip_h['_period'].dropna().unique() if p],
+            key=_pip_sort, reverse=True
+        )
+
+        if not _pip_all_periods:
+            st.info("No historical data found for this team yet.")
+        else:
+            _pip_c1, _pip_c2 = st.columns([3, 1])
+            with _pip_c1:
+                _pip_sel = st.selectbox(
+                    "Period:", _pip_all_periods[:12], key="pip_period_sel"
+                )
+            with _pip_c2:
+                _pip_trend_n = st.slider("Trend periods", 2, 8, 6, key="pip_trend_n")
+
+            # ── Per-rep table for selected period ──
+            _pip_period_h = _pip_h[_pip_h['_period'] == _pip_sel]
+            _pip_grp = _pip_period_h.groupby(['First_Name','Last_Name','Rep'], as_index=False).agg(
+                Wins=('Wins','sum'), Calls=('Calls','sum'),
+                LT=('Lawn Treatment','sum'), Mosquito=('Mosquito','sum'),
+                Bush=('Bush Trimming','sum'), Flower=('Flower Bed Weeding','sum'),
+                Leaf=('Leaf Removal','sum')
+            )
+            _pip_grp['Name']    = _pip_grp['First_Name'].str.strip() + ' ' + _pip_grp['Last_Name'].str.strip()
+            _pip_grp['Conv%']   = (_pip_grp['Wins'] / _pip_grp['Calls'].replace(0, np.nan) * 100).round(1).fillna(0)
+            _pip_grp['LT%']     = (_pip_grp['LT']   / _pip_grp['Wins'].replace(0, np.nan) * 100).round(1).fillna(0)
+            _pip_all_att        = _pip_grp[['LT','Mosquito','Bush','Flower','Leaf']].sum(axis=1)
+            _pip_grp['Attach%'] = (_pip_all_att / _pip_grp['Wins'].replace(0, np.nan) * 100).round(1).fillna(0)
+
+            # ── QA for selected period ──
+            _pip_qa_scores = {}
+            if not _tl_qa_raw.empty:
+                _pip_sc = 'New Score' if 'New Score' in _tl_qa_raw.columns else 'Score'
+                _pip_pp = _pip_sel.split()   # e.g. ["May", "1-15", "2026"]
+                if len(_pip_pp) == 3:
+                    _pip_mm = {'Jan':1,'Feb':2,'Mar':3,'Apr':4,'May':5,'Jun':6,
+                               'Jul':7,'Aug':8,'Sep':9,'Oct':10,'Nov':11,'Dec':12}
+                    _pip_pmon = _pip_mm.get(_pip_pp[0], 0)
+                    _pip_pyr  = int(_pip_pp[2])
+                    _pip_is_h1 = _pip_pp[1].startswith('1')
+                    _pip_dstart = 1 if _pip_is_h1 else 16
+                    _pip_dend   = 15 if _pip_is_h1 else _cal.monthrange(_pip_pyr, _pip_pmon)[1]
+
+                    _pip_qa_filt = _tl_qa_raw[
+                        (_tl_qa_raw['_scoring_week'].dt.year  == _pip_pyr) &
+                        (_tl_qa_raw['_scoring_week'].dt.month == _pip_pmon) &
+                        (_tl_qa_raw['_scoring_week'].dt.day.between(_pip_dstart, _pip_dend))
+                    ].copy()
+
+                    _pip_tn = load_teams_new_names(_tl_cache_bust)
+                    # Build agent-name → rep-name lookup for this team
+                    _pip_ag_map = {}
+                    for _, _pr in _pip_grp.iterrows():
+                        _nm = _pr['Name'].strip().lower()
+                        _ag = _pip_tn.get(_nm, _pr['Name'])
+                        _pip_ag_map[_ag.strip().lower()] = _pr['Name']
+
+                    _pip_qa_filt = _pip_qa_filt[
+                        _pip_qa_filt['Agent'].str.strip().str.lower().isin(_pip_ag_map)
+                    ]
+                    for _ag_key, _rep_nm in _pip_ag_map.items():
+                        _ag_rows = _pip_qa_filt[_pip_qa_filt['Agent'].str.strip().str.lower() == _ag_key]
+                        if not _ag_rows.empty:
+                            _pip_qa_scores[_rep_nm] = round(_ag_rows[_pip_sc].dropna().mean(), 1)
+
+            _pip_grp['QA%'] = _pip_grp['Name'].map(_pip_qa_scores)
+
+            # ── Display ──
+            _pip_disp = _pip_grp[['Name','Wins','Calls','Conv%','LT%','Attach%','QA%']].copy()
+            _pip_disp = _pip_disp.sort_values('Conv%', ascending=False).reset_index(drop=True)
+
+            def _pip_bg(val, goal):
+                if pd.isna(val) or val == 0: return ''
+                if val >= goal:          return 'background-color: rgba(76,175,80,0.25)'
+                elif val >= goal * 0.9:  return 'background-color: rgba(255,152,0,0.25)'
+                else:                    return 'background-color: rgba(244,67,54,0.25)'
+
+            _pip_styled = (
+                _pip_disp.style
+                .map(lambda v: _pip_bg(v, BASE_CONV),   subset=['Conv%'])
+                .map(lambda v: _pip_bg(v, BASE_LT),     subset=['LT%'])
+                .map(lambda v: _pip_bg(v, BASE_ATTACH), subset=['Attach%'])
+                .map(lambda v: _pip_bg(v, BASE_QA) if pd.notna(v) else '', subset=['QA%'])
+            )
+
+            st.caption(
+                f"🎯 Base goals: Conv ≥{BASE_CONV:.0f}% · "
+                f"LT ≥{BASE_LT:.1f}% · Attach ≥{BASE_ATTACH:.0f}% · QA ≥{BASE_QA:.0f}%  |  "
+                f"🟢 at/above  🟡 within 10%  🔴 below"
+            )
+            st.dataframe(
+                _pip_styled,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    'Conv%':   st.column_config.NumberColumn("Conv%",   format="%.1f%%"),
+                    'LT%':     st.column_config.NumberColumn("LT%",     format="%.1f%%"),
+                    'Attach%': st.column_config.NumberColumn("Attach%", format="%.1f%%"),
+                    'QA%':     st.column_config.NumberColumn("QA%",     format="%.1f%%"),
+                    'Wins':    st.column_config.NumberColumn("Wins",    format="%d"),
+                    'Calls':   st.column_config.NumberColumn("Calls",   format="%d"),
+                }
+            )
+
+            # ── Team trend table ──
+            st.markdown(f"**Team Averages — Last {_pip_trend_n} Periods**")
+            _pip_trend_rows = []
+            for _tp in _pip_all_periods[:_pip_trend_n]:
+                _tph = _pip_h[_pip_h['_period'] == _tp]
+                _tw  = _tph['Wins'].sum()
+                _tc  = _tph['Calls'].sum()
+                _ta  = _tph[['Lawn Treatment','Mosquito','Bush Trimming','Flower Bed Weeding','Leaf Removal']].sum().sum()
+                _tlt = _tph['Lawn Treatment'].sum()
+                _pip_trend_rows.append({
+                    'Period':    _tp,
+                    'Wins':      int(_tw),
+                    'Calls':     int(_tc),
+                    'Conv%':     round(_tw / _tc * 100, 1) if _tc > 0 else 0.0,
+                    'LT%':       round(_tlt / _tw * 100, 1) if _tw > 0 else 0.0,
+                    'Attach%':   round(_ta  / _tw * 100, 1) if _tw > 0 else 0.0,
+                })
+            _pip_trend_df = pd.DataFrame(_pip_trend_rows)
+
+            def _pip_trend_bg(val, goal):
+                if pd.isna(val) or val == 0: return ''
+                if val >= goal:         return 'background-color: rgba(76,175,80,0.25)'
+                elif val >= goal * 0.9: return 'background-color: rgba(255,152,0,0.25)'
+                else:                   return 'background-color: rgba(244,67,54,0.25)'
+
+            _pip_trend_styled = (
+                _pip_trend_df.style
+                .map(lambda v: _pip_trend_bg(v, BASE_CONV),   subset=['Conv%'])
+                .map(lambda v: _pip_trend_bg(v, BASE_LT),     subset=['LT%'])
+                .map(lambda v: _pip_trend_bg(v, BASE_ATTACH), subset=['Attach%'])
+            )
+            st.dataframe(
+                _pip_trend_styled,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    'Conv%':   st.column_config.NumberColumn("Conv%",   format="%.1f%%"),
+                    'LT%':     st.column_config.NumberColumn("LT%",     format="%.1f%%"),
+                    'Attach%': st.column_config.NumberColumn("Attach%", format="%.1f%%"),
+                    'Wins':    st.column_config.NumberColumn("Wins",    format="%d"),
+                    'Calls':   st.column_config.NumberColumn("Calls",   format="%d"),
+                }
+            )
 
 # ----------------------------
 # 🏆 TAB 6: Senior Manager View
