@@ -3589,14 +3589,20 @@ if page == "👩‍💻 Team Lead Dashboard":
                 cycle_df[_bc] = pd.to_numeric(cycle_df[_bc], errors='coerce').fillna(0)
 
             cycle_wins     = cycle_df['Wins'].sum()
-            cycle_calls    = cycle_df['Calls'].sum()
             cycle_lt       = cycle_df['Lawn Treatment'].sum()
             cycle_attaches = (cycle_df['Lawn Treatment'] + cycle_df['Leaf Removal'] +
                               cycle_df['Mosquito'] + cycle_df['Flower Bed Weeding'] +
                               cycle_df['Bush Trimming']).sum()
 
-            # Use computed conversion (sheet formula is broken for all TLs)
-            conversion = round((cycle_wins / cycle_calls) * 100, 2) if cycle_calls > 0 else 0.0
+            # For conversion: only use days where Five9 calls have synced (team calls > 0).
+            # Wins arrive from Redshift in real-time; Five9 calls lag by hours or a day,
+            # so today's rows often have wins but 0 calls — which would inflate conversion.
+            _days_with_calls = cycle_df.groupby('Date')['Calls'].sum()
+            _synced_dates    = _days_with_calls[_days_with_calls > 0].index
+            _conv_df         = cycle_df[cycle_df['Date'].isin(_synced_dates)]
+            cycle_calls      = _conv_df['Calls'].sum()
+            _conv_wins       = _conv_df['Wins'].sum()
+            conversion = round((_conv_wins / cycle_calls) * 100, 2) if cycle_calls > 0 else 0.0
             attach     = parse_pct(bonus_row['Attach'])
             lt         = parse_pct(bonus_row['LT'])
             qa         = parse_pct(bonus_row['QA'])
