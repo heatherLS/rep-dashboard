@@ -3577,10 +3577,29 @@ if page == "👩‍💻 Team Lead Dashboard":
                 except:
                     return 0
 
-            conversion = parse_pct(bonus_row['Conversion'])
-            attach = parse_pct(bonus_row['Attach'])
-            lt = parse_pct(bonus_row['LT'])
-            qa = parse_pct(bonus_row['QA'])
+            # --- Compute cycle stats from history (more reliable than sheet formulas) ---
+            history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
+            cycle_df = history_df[
+                (history_df['Date'].dt.date >= cycle_start) &
+                (history_df['Date'].dt.date <= cycle_end) &
+                (history_df['Manager_Direct'].astype(str).str.strip().str.lower() == selected_lead_clean)
+            ].copy()
+            for _bc in ['Wins', 'Calls', 'Lawn Treatment', 'Leaf Removal',
+                        'Mosquito', 'Flower Bed Weeding', 'Bush Trimming']:
+                cycle_df[_bc] = pd.to_numeric(cycle_df[_bc], errors='coerce').fillna(0)
+
+            cycle_wins     = cycle_df['Wins'].sum()
+            cycle_calls    = cycle_df['Calls'].sum()
+            cycle_lt       = cycle_df['Lawn Treatment'].sum()
+            cycle_attaches = (cycle_df['Lawn Treatment'] + cycle_df['Leaf Removal'] +
+                              cycle_df['Mosquito'] + cycle_df['Flower Bed Weeding'] +
+                              cycle_df['Bush Trimming']).sum()
+
+            # Use computed conversion (sheet formula is broken for all TLs)
+            conversion = round((cycle_wins / cycle_calls) * 100, 2) if cycle_calls > 0 else 0.0
+            attach     = parse_pct(bonus_row['Attach'])
+            lt         = parse_pct(bonus_row['LT'])
+            qa         = parse_pct(bonus_row['QA'])
             total_points = int(bonus_row['Total Points']) if str(bonus_row['Total Points']).isdigit() else 0
             tier = str(bonus_row['Bonus Tier']).strip()
             increase = str(bonus_row['$ Increase']).strip()
@@ -3622,31 +3641,10 @@ if page == "👩‍💻 Team Lead Dashboard":
                 st.warning("No bonus just yet — but you're not far! Let's mow down those goals:")
 
             # --- HISTORY SHEET CALC ---
-            st.markdown("### 🧠 What You Need to Hit Bonus Goals based on google form attach entries")
+            st.markdown("### 🧠 What You Need to Hit Bonus Goals")
 
-            history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
-            cycle_df = history_df[
-                (history_df['Date'].dt.date >= cycle_start) &
-                (history_df['Date'].dt.date <= cycle_end) &
-                (history_df['Manager_Direct'].astype(str).str.strip().str.lower() == selected_lead_clean)
-            ].copy()
-
-            # Clean numeric columns
-            for col in ['Wins', 'Lawn Treatment', 'Leaf Removal', 'Mosquito', 'Flower Bed Weeding', 'Bush Trimming']:
-                cycle_df[col] = pd.to_numeric(cycle_df[col], errors='coerce').fillna(0)
-
-            # Totals
-            cycle_wins = cycle_df['Wins'].sum()
-            cycle_lt = cycle_df['Lawn Treatment'].sum()
-            cycle_attaches = (
-                cycle_df['Lawn Treatment'] +
-                cycle_df['Leaf Removal'] +
-                cycle_df['Mosquito'] +
-                cycle_df['Flower Bed Weeding'] +
-                cycle_df['Bush Trimming']
-            ).sum()
-
-            lt_pct = (cycle_lt / cycle_wins) * 100 if cycle_wins > 0 else 0
+            # cycle_df, cycle_wins, cycle_calls, cycle_lt, cycle_attaches already computed above
+            lt_pct     = (cycle_lt       / cycle_wins) * 100 if cycle_wins > 0 else 0
             attach_pct = (cycle_attaches / cycle_wins) * 100 if cycle_wins > 0 else 0
 
             st.markdown(f"""
@@ -3655,8 +3653,8 @@ if page == "👩‍💻 Team Lead Dashboard":
             """)
 
             thresholds = {"Conversion": BASE_CONV, "Attach": BASE_ATTACH, "LT": BASE_LT, "QA": BASE_QA}
-            team_calls = float(bonus_row.get("Call #", 0))
-            team_wins = float(bonus_row.get("Win #", 0))
+            team_calls = cycle_calls
+            team_wins  = cycle_wins
             team_qa_scores = display_df['QA %']
 
             needs = []
