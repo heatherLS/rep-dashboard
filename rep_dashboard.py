@@ -4122,6 +4122,64 @@ if page == "👩‍💻 Team Lead Dashboard":
                 }
             )
 
+            # ── Monthly summary ──
+            st.markdown("**Monthly Summary — Team Totals**")
+            _pip_h['_month'] = _pip_h['Date'].dt.to_period('M')
+            _pip_months = sorted(_pip_h['_month'].dropna().unique(), reverse=True)[:6]
+            _pip_month_rows = []
+            for _tm in _pip_months:
+                _tmh = _pip_h[_pip_h['_month'] == _tm]
+                _mw  = _tmh['Wins'].sum()
+                _mc  = _tmh['Calls'].sum()
+                _ma  = _tmh[['Lawn Treatment','Mosquito','Bush Trimming','Flower Bed Weeding','Leaf Removal']].sum().sum()
+                _mlt = _tmh['Lawn Treatment'].sum()
+                # QA for this month from already-loaded raw QA
+                _mqa = np.nan
+                if not _tl_qa_raw.empty:
+                    _pip_msc = 'New Score' if 'New Score' in _tl_qa_raw.columns else 'Score'
+                    _pip_mtn = load_teams_new_names(_tl_cache_bust)
+                    _pip_team_agents = set()
+                    for _, _mtr in _pip_grp.iterrows():
+                        _mnm = _mtr['Name'].strip().lower()
+                        _pip_team_agents.add(_pip_mtn.get(_mnm, _mtr['Name']).strip().lower())
+                    _mqa_rows = _tl_qa_raw[
+                        (_tl_qa_raw['_scoring_week'].dt.year  == _tm.year) &
+                        (_tl_qa_raw['_scoring_week'].dt.month == _tm.month) &
+                        (_tl_qa_raw['Agent'].str.strip().str.lower().isin(_pip_team_agents))
+                    ]
+                    if not _mqa_rows.empty:
+                        _mqa = round(_mqa_rows[_pip_msc].dropna().mean(), 1)
+                _pip_month_rows.append({
+                    'Month':   str(_tm),
+                    'Wins':    int(_mw),
+                    'Calls':   int(_mc),
+                    'Conv%':   round(_mw / _mc  * 100, 1) if _mc  > 0 else 0.0,
+                    'LT%':     round(_mlt / _mw * 100, 1) if _mw  > 0 else 0.0,
+                    'Attach%': round(_ma  / _mw * 100, 1) if _mw  > 0 else 0.0,
+                    'QA%':     _mqa,
+                })
+            _pip_month_df = pd.DataFrame(_pip_month_rows)
+            _pip_month_styled = (
+                _pip_month_df.style
+                .map(lambda v: _pip_trend_bg(v, BASE_CONV),   subset=['Conv%'])
+                .map(lambda v: _pip_trend_bg(v, BASE_LT),     subset=['LT%'])
+                .map(lambda v: _pip_trend_bg(v, BASE_ATTACH), subset=['Attach%'])
+                .map(lambda v: _pip_trend_bg(v, BASE_QA) if pd.notna(v) else '', subset=['QA%'])
+            )
+            st.dataframe(
+                _pip_month_styled,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    'Conv%':   st.column_config.NumberColumn("Conv%",   format="%.1f%%"),
+                    'LT%':     st.column_config.NumberColumn("LT%",     format="%.1f%%"),
+                    'Attach%': st.column_config.NumberColumn("Attach%", format="%.1f%%"),
+                    'QA%':     st.column_config.NumberColumn("QA%",     format="%.1f%%"),
+                    'Wins':    st.column_config.NumberColumn("Wins",    format="%d"),
+                    'Calls':   st.column_config.NumberColumn("Calls",   format="%d"),
+                }
+            )
+
 # ----------------------------
 # 🏆 TAB 6: Senior Manager View
 # ----------------------------
