@@ -461,7 +461,7 @@ def load_new_hire_overrides() -> dict:
 # Main sync
 # ---------------------------------------------------------------------------
 
-def sync(today_only: bool = False):
+def sync(today_only: bool = False, backfill_date=None):
     print("Connecting to Redshift...")
     try:
         conn = get_conn()
@@ -475,7 +475,11 @@ def sync(today_only: bool = False):
     # Date range
     today = date.today()
     yesterday = today - timedelta(days=1)
-    if today_only:
+    if backfill_date:
+        start = backfill_date
+        end = backfill_date
+        print(f"Pulling data for {start} (backfill mode)")
+    elif today_only:
         # Pull today + yesterday (covers both real-time and Five9 T+1)
         start = yesterday
         end = today
@@ -759,5 +763,14 @@ if __name__ == "__main__":
         "--today", action="store_true",
         help="Fast mode: pull today + yesterday only, merge into existing CSV"
     )
+    parser.add_argument(
+        "--date", type=str, default=None,
+        help="Backfill a specific date (YYYY-MM-DD), merging into existing CSV"
+    )
     args = parser.parse_args()
-    sync(today_only=args.today)
+    if args.date:
+        from datetime import date as _date
+        specific = _date.fromisoformat(args.date)
+        sync(today_only=True, backfill_date=specific)
+    else:
+        sync(today_only=args.today)
