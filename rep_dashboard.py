@@ -3765,42 +3765,47 @@ if page == "👩‍💻 Team Lead Dashboard":
             else:
                 st.warning("No bonus just yet — but you're not far! Let's mow down those goals:")
 
-            # What you need (bonus goals)
             st.markdown("### 🧠 What You Need to Hit Bonus Goals")
-            lt_pct     = (cycle_lt / cycle_wins * 100)       if cycle_wins > 0 else 0
-            attach_pct = (cycle_attaches / cycle_wins * 100) if cycle_wins > 0 else 0
+
+            # Use the snapshot numbers from tl_bonus_df (already correct, sourced from
+            # Redshift-synced data) rather than recalculating from history sheet.
+            _snap_conv   = conversion        # already parsed above from bonus_row
+            _snap_attach = parse_pct(bonus_row.get('Attach', 0))
+            _snap_lt     = parse_pct(bonus_row.get('LT', 0))
+
             st.markdown(f"""
-            - 📦 **All-In Attach Rate:** `{attach_pct:.2f}%` {check(attach_pct, BASE_ATTACH)}
-            - 🍃 **Lawn Treatment Rate:** `{lt_pct:.2f}%` {check(lt_pct, BASE_LT)}
+            - 📦 **All-In Attach Rate:** `{_snap_attach:.2f}%` {check(_snap_attach, BASE_ATTACH)}
+            - 🍃 **Lawn Treatment Rate:** `{_snap_lt:.2f}%` {check(_snap_lt, BASE_LT)}
             """)
 
             needs = []
-            if conversion < BASE_CONV - 0.001:
+
+            if _snap_conv < BASE_CONV - 0.001:
                 more = math.ceil((BASE_CONV / 100) * cycle_calls) - _conv_wins
                 if more > 0:
                     needs.append(f"🏎️ **{more} more Wins** to reach {BASE_CONV:.0f}% Conversion")
-            if attach_pct < BASE_ATTACH:
+
+            if _snap_attach < BASE_ATTACH:
+                # How many more attaches needed at current win count
                 needed_att = math.ceil((BASE_ATTACH / 100) * cycle_wins)
+                current_att = round(_snap_attach / 100 * cycle_wins)
                 needs.append(
-                    f"📦 **{max(0, needed_att - int(cycle_attaches))} more Attaches** "
+                    f"📦 **{max(0, needed_att - current_att)} more Attaches** "
                     f"to hit {BASE_ATTACH:.0f}% All-In Attach"
                 )
-            if lt_pct < BASE_LT:
+
+            if _snap_lt < BASE_LT:
                 needed_lt_count = math.ceil((BASE_LT / 100) * cycle_wins)
+                current_lt_count = round(_snap_lt / 100 * cycle_wins)
                 needs.append(
-                    f"🌱 **{max(0, needed_lt_count - int(cycle_lt))} more Lawn Treatments** "
+                    f"🌱 **{max(0, needed_lt_count - current_lt_count)} more Lawn Treatments** "
                     f"to reach {BASE_LT:.1f}% LT"
                 )
-            _qa_scores = display_df['QA %']
-            cur_qa_avg = _qa_scores[_qa_scores > 0].mean() if not _qa_scores[_qa_scores > 0].empty else 0
-            if cur_qa_avg < BASE_QA:
-                n_agents     = _qa_scores.shape[0]
-                needed_total = BASE_QA * n_agents
-                current_tot  = _qa_scores.sum()
-                more_100s    = max(1, math.ceil((needed_total - current_tot) / (100 - BASE_QA)))
-                needs.append(
-                    f"🎯 **{more_100s} more 100 QA scores** to average {BASE_QA:.0f}%"
-                )
+
+            # QA is graded one week behind — skip the math, show a helpful note instead
+            needs.append(
+                f"🎯 **QA:** {qa:.2f}% current — graded weekly, check back after scoring completes"
+            )
 
             if needs:
                 st.warning("Here's what your team needs to meet **all 4 bonus base goals**:")
@@ -3811,7 +3816,6 @@ if page == "👩‍💻 Team Lead Dashboard":
                     "Your team is currently hitting **all 4 bonus base goals** 💪 "
                     "Time to rake in that bonus! 🌿💸"
                 )
-
         # ----------------------------------------------------------------
         # 📣 SHOUTOUT GENERATOR
         # ----------------------------------------------------------------
