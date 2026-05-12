@@ -3270,16 +3270,16 @@ if page == "📅 Yesterday":
     """, unsafe_allow_html=True)
 
 
-# 👩‍💻 TAB 5:  Team Lead Dashboard
-# --------------------------------------------
-
 if page == "👩‍💻 Team Lead Dashboard":
 
     from pytz import timezone
     eastern = timezone('US/Eastern')
-    cache_bust_key = datetime.now(eastern).strftime('%Y-%m-%d-%H-') + str(datetime.now(eastern).minute // 5 * 5).zfill(2)
+    cache_bust_key = (
+        datetime.now(eastern).strftime('%Y-%m-%d-%H-')
+        + str(datetime.now(eastern).minute // 5 * 5).zfill(2)
+    )
 
-    df = load_data(cache_bust_key).copy()
+    df         = load_data(cache_bust_key).copy()
     history_df = load_history(cache_bust_key).copy()
     if 'Name_Proper' not in history_df.columns:
         history_df['Name_Proper'] = (
@@ -3287,41 +3287,41 @@ if page == "👩‍💻 Team Lead Dashboard":
             + ' '
             + history_df['Last_Name'].astype(str).str.strip()
         ).str.strip()
-    # --- Live Base Goals from Avatar Leaderboard sheet ---
-    BONUS_SHEET_URL = (
-        "https://docs.google.com/spreadsheets/d/"
-        "1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU"
-        "/export?format=csv&gid=374383792"
-    )
 
+    # ----------------------------------------------------------------
+    # BONUS BASE GOALS  (bi-weekly bonus scorecard thresholds)
+    # Used for: TL Bonus Tracker, Rep Breakdown highlighting
+    # ----------------------------------------------------------------
     @st.cache_data(show_spinner=False)
     def load_base_goals(url: str):
-        df = pd.read_csv(url, header=None)
-        df = df.fillna("")
+        raw = pd.read_csv(url, header=None).fillna("")
 
-        # Helper: find first row where "Base" appears
         def find_base(section_label):
-            section_row = df.index[df.iloc[:,1].astype(str).str.strip() == section_label].tolist()
-            if not section_row: 
+            section_row = raw.index[
+                raw.iloc[:, 1].astype(str).str.strip() == section_label
+            ].tolist()
+            if not section_row:
                 return None
             start = section_row[0] + 1
-            for r in range(start, len(df)):
-                label = str(df.iat[r,2]).strip()
-                if label.lower() == "base":
-                    val = str(df.iat[r,1]).replace("%","").strip()
-                    try: return float(val)
-                    except: return None
+            for r in range(start, len(raw)):
+                if str(raw.iat[r, 2]).strip().lower() == "base":
+                    val = str(raw.iat[r, 1]).replace("%", "").strip()
+                    try:
+                        return float(val)
+                    except Exception:
+                        return None
             return None
 
         return {
             "Conversion": find_base("Conversion"),
-            "Attach": find_base("All-In Attach Rate"),
-            "LT": find_base("LT"),
-            "QA": find_base("QA")
+            "Attach":     find_base("All-In Attach Rate"),
+            "LT":         find_base("LT"),
+            "QA":         find_base("QA"),
         }
 
-    base_goals = load_base_goals(BONUS_SHEET_URL)
-    def coalesce_num(x, fallback):
+    _bonus_base = load_base_goals(BONUS_SHEET_URL)
+
+    def _coalesce(x, fallback):
         try:
             if x is None:
                 return fallback
@@ -3330,37 +3330,144 @@ if page == "👩‍💻 Team Lead Dashboard":
             return float(x)
         except Exception:
             return fallback
-    BASE_CONV   = coalesce_num(base_goals.get("Conversion"), 20.0)
-    BASE_ATTACH = coalesce_num(base_goals.get("Attach"), 25.0)
-    BASE_LT     = coalesce_num(base_goals.get("LT"), 5.5)
-    BASE_QA     = coalesce_num(base_goals.get("QA"), 80.0)
 
-    # ---- SELECT TEAM LEAD ----
+    BASE_CONV   = _coalesce(_bonus_base.get("Conversion"), 20.0)
+    BASE_ATTACH = _coalesce(_bonus_base.get("Attach"),     25.0)
+    BASE_LT     = _coalesce(_bonus_base.get("LT"),          5.5)
+    BASE_QA     = _coalesce(_bonus_base.get("QA"),         80.0)
+
+    # ----------------------------------------------------------------
+    # QUARTERLY PIP GOALS  (quarterly / monthly performance targets)
+    # Used for: Half-Month Performance Review color-coding & caption
+    # Completely separate from the bonus bi-weekly tiers above.
+    # ----------------------------------------------------------------
+    @st.cache_data(show_spinner=False, ttl=3600)
+    def load_quarterly_pip_goals(_cache_bust_key: str) -> dict:
+        """
+        Reads the right-hand 'Quarterly' section of the Cycles/Goals/Scales sheet.
+
+        Returns a dict with up to two keys:
+          'quarter' -> {label, conv, attach, lt, qa}   (e.g. Q2 containing today's month)
+          'month'   -> {label, conv, attach, lt, qa}   (e.g. 'May' row)
+
+        Priority for PIP thresholds: month > quarter > bonus base (fallback).
+        """
+        import re as _re
+
+        QUARTER_LABELS = {'Q1', 'Q2', 'Q3', 'Q4'}
+        MONTH_NAMES = {
+            'January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December',
+            'Jan', 'Feb', 'Mar', 'Apr', 'Jun', 'Jul', 'Aug',
+            'Sep', 'Oct', 'Nov', 'Dec',
+        }
+        # Q → calendar months
+        Q_MONTHS = {
+            'Q1': [1, 2, 3], 'Q2': [4, 5, 6],
+            'Q3': [7, 8, 9], 'Q4': [10, 11, 12],
+        }
+
+        def _pv(v):
+            try:
+                return float(str(v).replace('%', '').strip())
+            except Exception:
+                return None
+
+        try:
+            _df = pd.read_csv(_CYCLES_GOALS_URL, header=None, dtype=str).fillna("")
+            n_cols = len(_df.columns)
+
+            # Step 1: find the column that contains "Quarterly" in row 0
+            _qcol = None
+            for ci in range(n_cols):
+                if 'quarterly' in str(_df.iat[0, ci]).strip().lower():
+                    _qcol = ci
+                    break
+            if _qcol is None:
+                return {}
+
+            # Step 2: find Conversion / Attach / LT / QA column indices
+            # from the header row (row index 1) to the RIGHT of _qcol
+            _hrow = [str(_df.iat[1, ci]).strip().lower() for ci in range(n_cols)]
+            _conv_ci = _att_ci = _lt_ci = _qa_ci = None
+            for ci in range(_qcol, n_cols):
+                h = _hrow[ci]
+                if h == 'conversion'  and _conv_ci is None: _conv_ci = ci
+                elif h == 'attach'    and _att_ci  is None: _att_ci  = ci
+                elif h == 'lt'        and _lt_ci   is None: _lt_ci   = ci
+                elif h == 'qa'        and _qa_ci   is None: _qa_ci   = ci
+
+            if not all([_conv_ci, _att_ci, _qa_ci]):
+                return {}
+
+            today              = datetime.now().date()
+            cur_month_full     = today.strftime('%B')   # "May"
+            cur_month_abbr     = today.strftime('%b')   # "May"
+            cur_month_num      = today.month
+
+            result = {}
+            for ri in range(2, len(_df)):
+                cell = str(_df.iat[ri, _qcol]).strip()
+                if not cell or cell.lower() == 'nan':
+                    continue
+
+                conv   = _pv(_df.iat[ri, _conv_ci])
+                attach = _pv(_df.iat[ri, _att_ci])
+                lt     = _pv(_df.iat[ri, _lt_ci]) if _lt_ci else None
+                qa     = _pv(_df.iat[ri, _qa_ci])
+
+                if cell in QUARTER_LABELS:
+                    if cur_month_num in Q_MONTHS.get(cell, []):
+                        result['quarter'] = {
+                            'label': cell,
+                            'conv': conv, 'attach': attach, 'lt': lt, 'qa': qa,
+                        }
+
+                elif cell in MONTH_NAMES:
+                    if cell in (cur_month_full, cur_month_abbr):
+                        result['month'] = {
+                            'label': cell,
+                            'conv': conv, 'attach': attach, 'lt': lt, 'qa': qa,
+                        }
+
+            return result
+
+        except Exception:
+            return {}
+
+    # ----------------------------------------------------------------
+    # SELECT TEAM LEAD
+    # ----------------------------------------------------------------
     manager_directs = sorted(df['Manager_Direct'].dropna().unique())
-    # Pre-select the logged-in TL's name if it matches a Manager_Direct entry
     _tl_default = 0
     if is_tl and not auth_row.empty:
-        _auth_last = auth_row['Last_Name'].values[0].strip()
+        _auth_last       = auth_row['Last_Name'].values[0].strip()
         _auth_first_name = auth_row['First_Name'].values[0].strip()
-        _tl_name_fmt = f"{_auth_last}, {_auth_first_name}"  # "Lapuz, Mona"
+        _tl_name_fmt = f"{_auth_last}, {_auth_first_name}"
         if _tl_name_fmt in manager_directs:
             _tl_default = manager_directs.index(_tl_name_fmt)
-    selected_lead = st.selectbox("Select Your Name (Team Lead):", manager_directs, index=_tl_default)
 
-    # Filter reps under selected team lead using org chart as source of truth
-    _org_assignments = load_org_chart_assignments(cache_bust_key)
-    _tl_first_last = _tl_key_to_first_last(selected_lead)
+    selected_lead = st.selectbox(
+        "Select Your Name (Team Lead):", manager_directs, index=_tl_default
+    )
+
+    # Filter reps via org chart (source of truth)
+    _org_assignments  = load_org_chart_assignments(cache_bust_key)
+    _tl_first_last    = _tl_key_to_first_last(selected_lead)
+
     if _org_assignments:
         _name_lower = (
             df['First_Name'].astype(str).str.strip() + ' ' +
             df['Last_Name'].astype(str).str.strip()
         ).str.strip().str.lower()
-        team_df = df[_name_lower.isin(
-            [n for n, tl in _org_assignments.items() if tl == _tl_first_last]
-        )].copy()
+        team_df = df[
+            _name_lower.isin(
+                [n for n, tl in _org_assignments.items() if tl == _tl_first_last]
+            )
+        ].copy()
     else:
-        # Fallback to Manager_Direct if org chart is unreachable
         team_df = df[df['Manager_Direct'] == selected_lead].copy()
+
     if 'Name_Proper' not in team_df.columns:
         if 'Full_Name' in team_df.columns:
             team_df['Name_Proper'] = team_df['Full_Name']
@@ -3373,48 +3480,56 @@ if page == "👩‍💻 Team Lead Dashboard":
         else:
             team_df['Name_Proper'] = team_df['Rep'].astype(str)
 
-    # Determine team name from the lead's reps
-    team_name = team_df['Team Name'].dropna().astype(str).unique()[0] if not team_df.empty else "Unknown"
+    team_name = (
+        team_df['Team Name'].dropna().astype(str).unique()[0]
+        if not team_df.empty else "Unknown"
+    )
 
-    # Calculate team rank across all teams
+    # ---- Team rank across all teams ----
     team_stats = df[df['Calls'] > 0].copy()
     team_stats['Calls'] = pd.to_numeric(team_stats['Calls'], errors='coerce')
-    team_stats['Wins'] = pd.to_numeric(team_stats['Wins'], errors='coerce')
-
+    team_stats['Wins']  = pd.to_numeric(team_stats['Wins'],  errors='coerce')
     team_totals = team_stats.groupby("Team Name").agg(
         Total_Calls=("Calls", "sum"),
-        Total_Wins=("Wins", "sum")
+        Total_Wins=("Wins",  "sum"),
     ).reset_index()
     team_totals['Conversion'] = team_totals.apply(
         lambda r: (r['Total_Wins'] / r['Total_Calls'] * 100) if r['Total_Calls'] > 0 else 0.0,
-        axis=1
+        axis=1,
     )
-    team_totals['Rank'] = team_totals['Conversion'].rank(ascending=False, method='min').astype(int)
+    team_totals['Rank'] = (
+        team_totals['Conversion'].rank(ascending=False, method='min').astype(int)
+    )
+    team_rank = (
+        int(team_totals.loc[team_totals['Team Name'] == team_name, 'Rank'].values[0])
+        if team_name in team_totals['Team Name'].values else "N/A"
+    )
 
-    # Extract this team's rank
-    team_rank = int(team_totals.loc[team_totals['Team Name'] == team_name, 'Rank'].values[0]) if team_name in team_totals['Team Name'].values else "N/A"
-
-    # ---- TEAM STATS ----
+    # ----------------------------------------------------------------
+    # TEAM STATS
+    # ----------------------------------------------------------------
     st.subheader(f"📊 Team Stats for {selected_lead}")
+
     if team_df.empty:
         st.warning("No reps found for this Team Lead.")
     else:
-        attach_cols = ['Lawn Treatment', 'Leaf Removal', 'Mosquito', 'Flower Bed Weeding', 'Bush Trimming', 'Wins', 'Calls']
+        attach_cols = [
+            'Lawn Treatment', 'Leaf Removal', 'Mosquito',
+            'Flower Bed Weeding', 'Bush Trimming', 'Wins', 'Calls',
+        ]
         for col in attach_cols:
             team_df[col] = pd.to_numeric(team_df[col], errors='coerce').fillna(0)
 
         team_df['All-In Attach %'] = (
-            (team_df['Lawn Treatment'] +
-            team_df['Leaf Removal'] +
-            team_df['Mosquito'] +
-            team_df['Flower Bed Weeding'] +
-            team_df['Bush Trimming']) /
-            team_df['Wins'].replace(0, np.nan)
-        ) * 100
-        team_df['All-In Attach %'] = team_df['All-In Attach %'].fillna(0)
+            (
+                team_df['Lawn Treatment'] + team_df['Leaf Removal'] +
+                team_df['Mosquito'] + team_df['Flower Bed Weeding'] +
+                team_df['Bush Trimming']
+            ) / team_df['Wins'].replace(0, np.nan) * 100
+        ).fillna(0)
 
         cols_to_show = ['Name_Proper', 'Conversion', 'LT Attach', 'All-In Attach %', 'BonusQA']
-        display_df = team_df[cols_to_show].copy()
+        display_df   = team_df[cols_to_show].copy()
         display_df.columns = ['Rep', 'Conversion %', 'LT Attach %', 'All-In Attach %', 'QA %']
 
         for col in ['Conversion %', 'LT Attach %', 'QA %']:
@@ -3429,70 +3544,51 @@ if page == "👩‍💻 Team Lead Dashboard":
                 .astype(float)
             )
 
-        total_calls = team_df['Calls'].sum()
-        total_wins = team_df['Wins'].sum()
+        total_calls          = team_df['Calls'].sum()
+        total_wins           = team_df['Wins'].sum()
         total_lawn_treatments = team_df['Lawn Treatment'].sum()
         total_attaches = (
-            team_df['Lawn Treatment'] +
-            team_df['Leaf Removal'] +
-            team_df['Mosquito'] +
-            team_df['Flower Bed Weeding'] +
+            team_df['Lawn Treatment'] + team_df['Leaf Removal'] +
+            team_df['Mosquito'] + team_df['Flower Bed Weeding'] +
             team_df['Bush Trimming']
         ).sum()
 
-        avg_conversion = (total_wins / total_calls) * 100 if total_calls > 0 else 0
-        avg_attach = (total_attaches / total_wins) * 100 if total_wins > 0 else 0
-        avg_lt = (total_lawn_treatments / total_wins) * 100 if total_wins > 0 else 0
+        avg_conversion = (total_wins / total_calls * 100) if total_calls > 0 else 0
+        avg_attach     = (total_attaches / total_wins * 100) if total_wins > 0 else 0
+        avg_lt         = (total_lawn_treatments / total_wins * 100) if total_wins > 0 else 0
 
-        qa_values = team_df['BonusQA'].dropna().astype(str).str.replace('%', '', regex=False).str.extract(r'([0-9.]+)', expand=False).astype(float)
-        qa_display = qa_values.iloc[0] if not qa_values.empty else 0
-
-        # ---------- SAFE TOP TEAM / YOUR TEAM METRICS ----------
-        # Make sure numeric attach columns exist & are numeric
+        # ---- Top team comparison card ----
         df_numeric = df.copy()
-        for col in ['Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']:
+        for col in ['Lawn Treatment', 'Leaf Removal', 'Bush Trimming',
+                    'Flower Bed Weeding', 'Mosquito']:
             if col not in df_numeric.columns:
                 df_numeric[col] = 0
             df_numeric[col] = pd.to_numeric(df_numeric[col], errors='coerce').fillna(0)
 
-        # Defaults so we never crash if data is missing
         top_team_name = "—"
-        top_team_attaches = 0
-        top_team_lt = 0
-        your_team_attaches = 0
-        your_team_lt = 0
-        needed_wins = 0
-        needed_attaches = 0
-        needed_lt = 0
+        top_team_attaches = top_team_lt = 0
+        your_team_attaches = your_team_lt = 0
+        needed_wins = needed_attaches = needed_lt = 0
 
-        # Compute only when we have data
-        if not team_df.empty and not team_totals.empty and ('Team Name' in df_numeric.columns):
-            # Top team by conversion
-            top_row = team_totals.sort_values(by="Conversion", ascending=False).iloc[0]
+        if not team_df.empty and not team_totals.empty and 'Team Name' in df_numeric.columns:
+            top_row       = team_totals.sort_values("Conversion", ascending=False).iloc[0]
             top_team_name = str(top_row.get('Team Name', '—'))
             top_total_wins = float(top_row.get('Total_Wins', 0) or 0.0)
-
-            # Your team totals already computed above: total_wins, team_name, etc.
             your_total_wins = float(total_wins or 0.0)
-
-            # Sum attaches for top team & your team
-            attach_cols_sum = ['Lawn Treatment', 'Leaf Removal', 'Bush Trimming', 'Flower Bed Weeding', 'Mosquito']
-
-            top_team_attaches = df_numeric.loc[df_numeric['Team Name'] == top_team_name, attach_cols_sum].sum().sum()
-            top_team_lt       = df_numeric.loc[df_numeric['Team Name'] == top_team_name, 'Lawn Treatment'].sum()
-
-            your_team_attaches = df_numeric.loc[df_numeric['Team Name'] == team_name, attach_cols_sum].sum().sum()
+            _svc = ['Lawn Treatment', 'Leaf Removal', 'Bush Trimming',
+                    'Flower Bed Weeding', 'Mosquito']
+            top_team_attaches  = df_numeric.loc[df_numeric['Team Name'] == top_team_name, _svc].sum().sum()
+            top_team_lt        = df_numeric.loc[df_numeric['Team Name'] == top_team_name, 'Lawn Treatment'].sum()
+            your_team_attaches = df_numeric.loc[df_numeric['Team Name'] == team_name, _svc].sum().sum()
             your_team_lt       = df_numeric.loc[df_numeric['Team Name'] == team_name, 'Lawn Treatment'].sum()
+            needed_wins        = max(0, int(round(top_total_wins - your_total_wins)))
+            needed_attaches    = max(0, int(round(top_team_attaches - your_team_attaches)))
+            needed_lt          = max(0, int(round(top_team_lt - your_team_lt)))
 
-            # Needed deltas (never negative)
-            needed_wins      = max(0, int(round(top_total_wins - your_total_wins)))
-            needed_attaches  = max(0, int(round(top_team_attaches - your_team_attaches)))
-            needed_lt        = max(0, int(round(top_team_lt - your_team_lt)))
-
-        # ---------- RENDER TOP TEAM CARD ----------
         st.markdown(f"""
-        <div style='text-align: center; font-size: 18px; margin-top: 10px; padding: 10px; border-radius: 8px;
-                    background-color: rgba(128,128,128,0.15); color: inherit; border: 1px solid rgba(128,128,128,0.4);'>
+        <div style='text-align:center; font-size:18px; margin-top:10px; padding:10px;
+                    border-radius:8px; background-color:rgba(128,128,128,0.15);
+                    color:inherit; border:1px solid rgba(128,128,128,0.4);'>
             <b>Can your team take the top spot?</b><br><br>
             🏆 Top Team: <b>{top_team_name}</b><br>
             💪 Your Team: <b>{team_name}</b><br><br>
@@ -3506,20 +3602,22 @@ if page == "👩‍💻 Team Lead Dashboard":
 
         valid_qa = display_df['QA %']
         valid_qa = valid_qa[valid_qa > 0]
-        avg_qa = valid_qa.mean() if not valid_qa.empty else 0
+        avg_qa   = valid_qa.mean() if not valid_qa.empty else 0
 
-        # 🧢 Team Logo + Rank
-        team_logo_url = f"https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/{team_name.replace(' ', '_').lower()}.png"
+        # Team logo + rank
+        team_logo_url = (
+            f"https://raw.githubusercontent.com/heatherLS/rep-dashboard/main/logos/"
+            f"{team_name.replace(' ', '_').lower()}.png"
+        )
         st.markdown(f"""
-        <div style='text-align: center;'>
+        <div style='text-align:center;'>
             <img src="{team_logo_url}" width="100"><br>
-            <div style='font-size: 20px; color: teal; font-weight: bold;'>🏅 Team Rank: {team_rank}</div>
+            <div style='font-size:20px; color:teal; font-weight:bold;'>🏅 Team Rank: {team_rank}</div>
         </div>
         """, unsafe_allow_html=True)
 
-        # 🌱 Today's Team Averages — Styled Block
         st.markdown(f"""
-        <div style='text-align: center; font-size: 18px; margin-top: 10px;'>
+        <div style='text-align:center; font-size:18px; margin-top:10px;'>
             <b>{team_name} — Today's Team Averages:</b><br>
             🧮 Conversion: {avg_conversion:.2f}%<br>
             🧩 All-In Attach: {avg_attach:.2f}%<br>
@@ -3531,40 +3629,42 @@ if page == "👩‍💻 Team Lead Dashboard":
 
         def highlight_top_nonzero(s):
             is_max = s == s[s > 0].max()
-            return ['background-color: #FFD700; color: black' if v else '' for v in is_max]
+            return [
+                'background-color:#FFD700; color:black' if v else ''
+                for v in is_max
+            ]
 
-        highlight_style = display_df.style.apply(highlight_top_nonzero, axis=0)
         st.write("### Rep Breakdown")
-        st.dataframe(highlight_style.format("{:.2f}"), use_container_width=True)
+        st.dataframe(
+            display_df.style.apply(highlight_top_nonzero, axis=0).format("{:.2f}"),
+            use_container_width=True,
+        )
 
-        # ----------------------------
-        # 💸 TEAM LEAD BONUS TRACKER
-        # ----------------------------
+        # ----------------------------------------------------------------
+        # 💸 TEAM LEAD BONUS TRACKER  (uses bi-weekly bonus goals)
+        # ----------------------------------------------------------------
         st.subheader("💸 Team Lead Bonus Tracker")
 
-        from datetime import datetime, timedelta
-        import math
-
-        # --- PAY CYCLE FUNCTION ---
         def get_current_pay_cycle():
-            today = datetime.today().date()
-            base_date = datetime(2025, 7, 20).date()  # Start of the first pay cycle
+            today      = datetime.today().date()
+            base_date  = datetime(2025, 7, 20).date()
             days_since = (today - base_date).days
-            cycle_start = base_date + timedelta(days=(days_since // 14) * 14)
-            cycle_end = cycle_start + timedelta(days=13)
-            return cycle_start, cycle_end
+            start      = base_date + timedelta(days=(days_since // 14) * 14)
+            end        = start + timedelta(days=13)
+            return start, end
 
         cycle_start, cycle_end = get_current_pay_cycle()
 
-        # --- LOAD BONUS SHEET ---
-        tl_bonus_url = "https://docs.google.com/spreadsheets/d/1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU/export?format=csv&gid=1302605632"
+        tl_bonus_url = (
+            "https://docs.google.com/spreadsheets/d/"
+            "1QSX8Me9ZkyNlXJWW_46XrRriHMFY8gIcY_R3FRXcdnU"
+            "/export?format=csv&gid=1302605632"
+        )
         tl_bonus_df = pd.read_csv(tl_bonus_url)
         tl_bonus_df.columns = tl_bonus_df.columns.str.strip()
-
-        # --- CLEAN + SELECT ---
         tl_bonus_df['TL_clean'] = tl_bonus_df['Team Lead'].astype(str).str.strip().str.lower()
-        selected_lead_clean = selected_lead.strip().lower()
-        lead_bonus = tl_bonus_df[tl_bonus_df['TL_clean'] == selected_lead_clean]
+        selected_lead_clean     = selected_lead.strip().lower()
+        lead_bonus              = tl_bonus_df[tl_bonus_df['TL_clean'] == selected_lead_clean]
 
         if lead_bonus.empty:
             st.warning(f"No bonus data found for: {selected_lead}")
@@ -3574,15 +3674,16 @@ if page == "👩‍💻 Team Lead Dashboard":
             def parse_pct(val):
                 try:
                     return float(str(val).replace('%', '').strip())
-                except:
+                except Exception:
                     return 0
 
-            # --- Compute cycle stats from history (more reliable than sheet formulas) ---
+            # Cycle stats from history
             history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
             cycle_df = history_df[
                 (history_df['Date'].dt.date >= cycle_start) &
                 (history_df['Date'].dt.date <= cycle_end) &
-                (history_df['Manager_Direct'].astype(str).str.strip().str.lower() == selected_lead_clean)
+                (history_df['Manager_Direct'].astype(str).str.strip().str.lower()
+                 == selected_lead_clean)
             ].copy()
             for _bc in ['Wins', 'Calls', 'Lawn Treatment', 'Leaf Removal',
                         'Mosquito', 'Flower Bed Weeding', 'Bush Trimming']:
@@ -3590,205 +3691,175 @@ if page == "👩‍💻 Team Lead Dashboard":
 
             cycle_wins     = cycle_df['Wins'].sum()
             cycle_lt       = cycle_df['Lawn Treatment'].sum()
-            cycle_attaches = (cycle_df['Lawn Treatment'] + cycle_df['Leaf Removal'] +
-                              cycle_df['Mosquito'] + cycle_df['Flower Bed Weeding'] +
-                              cycle_df['Bush Trimming']).sum()
+            cycle_attaches = (
+                cycle_df['Lawn Treatment'] + cycle_df['Leaf Removal'] +
+                cycle_df['Mosquito'] + cycle_df['Flower Bed Weeding'] +
+                cycle_df['Bush Trimming']
+            ).sum()
 
-            # For conversion: only use days where Five9 calls have synced (team calls > 0).
-            # Wins arrive from Redshift in real-time; Five9 calls lag by hours or a day,
-            # so today's rows often have wins but 0 calls — which would inflate conversion.
             _days_with_calls = cycle_df.groupby('Date')['Calls'].sum()
             _synced_dates    = _days_with_calls[_days_with_calls > 0].index
             _conv_df         = cycle_df[cycle_df['Date'].isin(_synced_dates)]
             cycle_calls      = _conv_df['Calls'].sum()
             _conv_wins       = _conv_df['Wins'].sum()
-            conversion = round((_conv_wins / cycle_calls) * 100, 2) if cycle_calls > 0 else 0.0
+            conversion = round((_conv_wins / cycle_calls * 100), 2) if cycle_calls > 0 else 0.0
             attach     = parse_pct(bonus_row['Attach'])
             lt         = parse_pct(bonus_row['LT'])
             qa         = parse_pct(bonus_row['QA'])
-            total_points = int(bonus_row['Total Points']) if str(bonus_row['Total Points']).isdigit() else 0
-            tier = str(bonus_row['Bonus Tier']).strip()
-            increase = str(bonus_row['$ Increase']).strip()
+            tier       = str(bonus_row['Bonus Tier']).strip()
+            increase   = str(bonus_row['$ Increase']).strip()
 
             def check(val, threshold):
                 return "✅" if val >= threshold else "❌"
 
             st.markdown(f"""
-            ### 📈 {selected_lead}'s Bonus Snapshot  
-            - **Conversion:** {conversion:.2f}% {check(conversion, BASE_CONV)}  
-            - **All-In Attach:** {attach:.2f}% {check(attach, BASE_ATTACH)}  
-            - **Lawn Treatment:** {lt:.2f}% {check(lt, BASE_LT)}  
-            - **QA:** {qa:.2f}% {check(qa, BASE_QA)}  
-            - **Total Points:** {total_points}  
-            - **Bonus Tier:** `{tier}`  
+            ### 📈 {selected_lead}'s Bonus Snapshot
+            - **Conversion:** {conversion:.2f}% {check(conversion, BASE_CONV)}
+            - **All-In Attach:** {attach:.2f}% {check(attach, BASE_ATTACH)}
+            - **Lawn Treatment:** {lt:.2f}% {check(lt, BASE_LT)}
+            - **QA:** {qa:.2f}% {check(qa, BASE_QA)}
+            - **Bonus Tier:** `{tier}`
             - **Hourly Increase:** **{increase}**
             """)
+            st.caption(
+                f"⚙️ Bonus base thresholds (bi-weekly): "
+                f"Conv ≥{BASE_CONV:.0f}% · Attach ≥{BASE_ATTACH:.0f}% · "
+                f"LT ≥{BASE_LT:.1f}% · QA ≥{BASE_QA:.0f}%"
+            )
 
-            # --- BONUS BLURB ---
             try:
                 hourly_float = float(increase.replace("$", "").strip())
-            except:
+            except Exception:
                 hourly_float = 0
 
             if hourly_float > 0:
-                estimated_hours = float(bonus_row.get("Hours Worked", 80))
-                bonus_total = hourly_float * estimated_hours
-                import math
-                hours_display = int(estimated_hours) if isinstance(estimated_hours, (int, float)) and not math.isnan(estimated_hours) else 80
-                bonus_total_safe = hourly_float * hours_display
-
-
-                st.markdown("### 🌟 Bonus ")
+                try:
+                    estimated_hours = float(bonus_row.get("Hours Worked", 80))
+                except Exception:
+                    estimated_hours = 80
+                hours_display  = int(estimated_hours) if not (isinstance(estimated_hours, float) and np.isnan(estimated_hours)) else 80
+                bonus_total    = hourly_float * hours_display
                 st.success(f"You're currently earning **${hourly_float:.2f}/hour**!")
-                st.markdown(f"With an estimated **{hours_display} hours worked**, that's about **${bonus_total_safe:.2f} extra this cycle!** 💸")
-                st.markdown("What will you spend your bonus on — a new mower or margarita pitcher? 😎")
-
+                st.markdown(
+                    f"With an estimated **{hours_display} hours worked**, "
+                    f"that's about **${bonus_total:.2f} extra this cycle!** 💸"
+                )
             else:
                 st.warning("No bonus just yet — but you're not far! Let's mow down those goals:")
 
-            # --- HISTORY SHEET CALC ---
+            # What you need (bonus goals)
             st.markdown("### 🧠 What You Need to Hit Bonus Goals")
-
-            # cycle_df, cycle_wins, cycle_calls, cycle_lt, cycle_attaches already computed above
-            lt_pct     = (cycle_lt       / cycle_wins) * 100 if cycle_wins > 0 else 0
-            attach_pct = (cycle_attaches / cycle_wins) * 100 if cycle_wins > 0 else 0
-
+            lt_pct     = (cycle_lt / cycle_wins * 100)       if cycle_wins > 0 else 0
+            attach_pct = (cycle_attaches / cycle_wins * 100) if cycle_wins > 0 else 0
             st.markdown(f"""
-            - 📦 **All-In Attach Rate:** `{attach_pct:.2f}%` {check(attach_pct, 25)}
-            - 🍃 **Lawn Treatment Rate:** `{lt_pct:.2f}%` {check(lt_pct, 5.5)}
+            - 📦 **All-In Attach Rate:** `{attach_pct:.2f}%` {check(attach_pct, BASE_ATTACH)}
+            - 🍃 **Lawn Treatment Rate:** `{lt_pct:.2f}%` {check(lt_pct, BASE_LT)}
             """)
 
-            thresholds = {"Conversion": BASE_CONV, "Attach": BASE_ATTACH, "LT": BASE_LT, "QA": BASE_QA}
-            team_calls = cycle_calls
-            team_wins  = cycle_wins
-            team_qa_scores = display_df['QA %']
-
             needs = []
-
-            # 🏎️ Conversion
-            actual_conversion = (team_wins / team_calls) * 100 if team_calls > 0 else 0
-            if actual_conversion < thresholds["Conversion"] - 0.001:
-                required_wins = (thresholds["Conversion"] / 100) * team_calls
-                more_wins_needed = math.ceil(required_wins - team_wins)
-                if more_wins_needed > 0:
-                    needs.append(
-                        f"🏎️ **{more_wins_needed} more Wins** to reach {thresholds['Conversion']:.2f}% Conversion"
-                    )
-
-            # 📦 Attach
-            if attach_pct < thresholds["Attach"]:
-                needed_attaches = math.ceil((thresholds["Attach"] / 100) * cycle_wins)
-                more_attaches_needed = max(0, needed_attaches - cycle_attaches)
+            if conversion < BASE_CONV - 0.001:
+                more = math.ceil((BASE_CONV / 100) * cycle_calls) - _conv_wins
+                if more > 0:
+                    needs.append(f"🏎️ **{more} more Wins** to reach {BASE_CONV:.0f}% Conversion")
+            if attach_pct < BASE_ATTACH:
+                needed_att = math.ceil((BASE_ATTACH / 100) * cycle_wins)
                 needs.append(
-                    f"📦 **{more_attaches_needed} more Attaches** to hit {thresholds['Attach']:.2f}% All-In Attach"
+                    f"📦 **{max(0, needed_att - int(cycle_attaches))} more Attaches** "
+                    f"to hit {BASE_ATTACH:.0f}% All-In Attach"
                 )
-
-            # 🍃 LT
-            if lt_pct < thresholds["LT"]:
-                needed_lt = math.ceil((thresholds["LT"] / 100) * cycle_wins)
-                more_lt_needed = max(0, needed_lt - cycle_lt)
+            if lt_pct < BASE_LT:
+                needed_lt_count = math.ceil((BASE_LT / 100) * cycle_wins)
                 needs.append(
-                    f"🌱 **{more_lt_needed} more Lawn Treatments** to reach {thresholds['LT']:.2f}% LT"
+                    f"🌱 **{max(0, needed_lt_count - int(cycle_lt))} more Lawn Treatments** "
+                    f"to reach {BASE_LT:.1f}% LT"
                 )
-            # ✅ QA
-            current_qa_avg = team_qa_scores[team_qa_scores > 0].mean()
-            if current_qa_avg < thresholds["QA"]:
-                num_agents = team_qa_scores.shape[0]
-                needed_qa_total = thresholds["QA"] * num_agents
-                current_qa_total = team_qa_scores.sum()
-                more_100s = math.ceil((needed_qa_total - current_qa_total) / (100 - thresholds["QA"]))
-                more_100s = max(1, more_100s)
+            _qa_scores = display_df['QA %']
+            cur_qa_avg = _qa_scores[_qa_scores > 0].mean() if not _qa_scores[_qa_scores > 0].empty else 0
+            if cur_qa_avg < BASE_QA:
+                n_agents     = _qa_scores.shape[0]
+                needed_total = BASE_QA * n_agents
+                current_tot  = _qa_scores.sum()
+                more_100s    = max(1, math.ceil((needed_total - current_tot) / (100 - BASE_QA)))
                 needs.append(
-                    f"🎯 **{more_100s} more 100 QA scores** to average {thresholds['QA']:.0f}%"
+                    f"🎯 **{more_100s} more 100 QA scores** to average {BASE_QA:.0f}%"
                 )
 
             if needs:
-                st.warning("You're not far! Here's what your team needs to meet **all 4 base goals** and cash in:")
+                st.warning("Here's what your team needs to meet **all 4 bonus base goals**:")
                 for line in needs:
                     st.markdown(f"- {line}")
             else:
-                st.success("You're crushing it — your team is currently hitting **all 4 base goals** 💪 Time to rake in that bonus! 🌿💸")
+                st.success(
+                    "Your team is currently hitting **all 4 bonus base goals** 💪 "
+                    "Time to rake in that bonus! 🌿💸"
+                )
 
-            # --- POINT CHART ---
-            st.caption("Team Leads earn bonus pay based on their team's performance in 4 metrics. All base thresholds must be met to qualify.")
-
-        # ---- SHOUTOUT GENERATOR ----
+        # ----------------------------------------------------------------
+        # 📣 SHOUTOUT GENERATOR
+        # ----------------------------------------------------------------
         st.subheader("📣 Shoutout Generator")
         fun_phrases = {
             "Conversion %": "Now that's how you mow down objections!",
-            "LT Attach %": "Sprinkling in those extras like a true lawn care artist!",
+            "LT Attach %":  "Sprinkling in those extras like a true lawn care artist!",
             "All-In Attach %": "Pulled out all the weeds and sealed the deal!",
-            "QA %": "Precision cuts and perfect scripts — QA on point!"
+            "QA %": "Precision cuts and perfect scripts — QA on point!",
         }
-
         top_performers = {}
         for col in display_df.columns:
-            non_zero_vals = display_df[col][display_df[col] > 0]
-            if not non_zero_vals.empty:
-                top_value = non_zero_vals.max()
-                tied_reps = non_zero_vals[non_zero_vals == top_value].index.tolist()
-                top_performers[col] = (tied_reps, top_value)
+            non_zero = display_df[col][display_df[col] > 0]
+            if not non_zero.empty:
+                top_val  = non_zero.max()
+                tied     = non_zero[non_zero == top_val].index.tolist()
+                top_performers[col] = (tied, top_val)
 
         for metric, (reps, value) in top_performers.items():
-            rep_names = ", ".join([f"**{rep}**" for rep in reps])
-            shoutout = f"🌟 Big shoutout to {rep_names} for leading the team in **{metric}** at **{value:.1f}%**! {fun_phrases.get(metric, 'You raked in results!')}"
-            st.code(shoutout, language='markdown')
+            rep_names = ", ".join(f"**{r}**" for r in reps)
+            phrase    = fun_phrases.get(metric, 'You raked in results!')
+            st.code(
+                f"🌟 Big shoutout to {rep_names} for leading the team in "
+                f"**{metric}** at **{value:.1f}%**! {phrase}",
+                language='markdown',
+            )
 
-        # ---- MOST IMPROVED ----
+        # ----------------------------------------------------------------
+        # 🔄 MOST IMPROVED
+        # ----------------------------------------------------------------
         st.subheader("🔄 Most Improved")
-
         available_dates = sorted(history_df['Date'].dropna().dt.date.unique())
-
-        st.write("### Select Timeframes to Compare")
-        col_a, col_b = st.columns(2)
-
+        col_a, col_b    = st.columns(2)
         with col_a:
-            start_a = st.selectbox("Start of Period A", available_dates, index=0, key='start_a')
-            end_a = st.selectbox("End of Period A", available_dates, index=len(available_dates)//2, key='end_a')
-
+            start_a = st.selectbox("Start of Period A", available_dates, index=0,                           key='start_a')
+            end_a   = st.selectbox("End of Period A",   available_dates, index=len(available_dates) // 2,   key='end_a')
         with col_b:
-            start_b = st.selectbox("Start of Period B", available_dates, index=len(available_dates)//2 + 1, key='start_b')
-            end_b = st.selectbox("End of Period B", available_dates, index=len(available_dates)-1, key='end_b')
+            start_b = st.selectbox("Start of Period B", available_dates, index=len(available_dates) // 2 + 1, key='start_b')
+            end_b   = st.selectbox("End of Period B",   available_dates, index=len(available_dates) - 1,    key='end_b')
 
         def get_period_df(start, end):
-            period_df = history_df[(history_df['Date'].dt.date >= start) &
-                                   (history_df['Date'].dt.date <= end) &
-                                   (history_df['Manager_Direct'] == selected_lead)].copy()
-
-            # Explicit list of needed numeric columns
+            period_df = history_df[
+                (history_df['Date'].dt.date >= start) &
+                (history_df['Date'].dt.date <= end) &
+                (history_df['Manager_Direct'] == selected_lead)
+            ].copy()
             cols_to_sum = [
                 'Calls', 'Wins', 'Lawn Treatment', 'Bush Trimming',
-                'Flower Bed Weeding', 'Mosquito', 'Leaf Removal'
+                'Flower Bed Weeding', 'Mosquito', 'Leaf Removal',
             ]
-
-            # Ensure all numeric columns are properly cleaned
             for col in cols_to_sum:
                 period_df[col] = (
-                    period_df[col]
-                    .astype(str)
+                    period_df[col].astype(str)
                     .str.replace('%', '', regex=False)
                     .str.extract(r'([0-9.]+)', expand=False)
-                    .astype(float)
-                    .fillna(0)
+                    .astype(float).fillna(0)
                 )
-
-            # Group by rep and sum raw numbers
             grouped = period_df.groupby('Name_Proper')[cols_to_sum].sum().reset_index()
-
-            # Recalculate performance metrics
-            grouped['Conversion'] = (grouped['Wins'] / grouped['Calls'].replace(0, np.nan)) * 100
-            grouped['LT Attach'] = (grouped['Lawn Treatment'] / grouped['Wins'].replace(0, np.nan)) * 100
+            grouped['Conversion']    = (grouped['Wins'] / grouped['Calls'].replace(0, np.nan)) * 100
+            grouped['LT Attach']     = (grouped['Lawn Treatment'] / grouped['Wins'].replace(0, np.nan)) * 100
             grouped['All-In Attach %'] = (
-                 (grouped['Lawn Treatment'] +
-                 grouped['Bush Trimming'] +
-                 grouped['Flower Bed Weeding'] +
-                 grouped['Mosquito'] +
-                 grouped['Leaf Removal']) /
-                grouped['Wins'].replace(0, np.nan)
+                (grouped['Lawn Treatment'] + grouped['Bush Trimming'] +
+                 grouped['Flower Bed Weeding'] + grouped['Mosquito'] +
+                 grouped['Leaf Removal']) / grouped['Wins'].replace(0, np.nan)
             ) * 100
-
             grouped.fillna(0, inplace=True)
-
             return grouped
 
         df_a = get_period_df(start_a, end_a)
@@ -3800,67 +3871,54 @@ if page == "👩‍💻 Team Lead Dashboard":
             a = df_a[df_a['Name_Proper'] == rep_name]
             b = df_b[df_b['Name_Proper'] == rep_name]
             if not a.empty and not b.empty:
-                prev_conversion = a['Conversion'].iloc[0]
-                prev_lt = a['LT Attach'].iloc[0]
-                prev_attach = a['All-In Attach %'].iloc[0]
-
-                current_conversion = b['Conversion'].iloc[0]
-                current_lt = b['LT Attach'].iloc[0]
-                current_attach = b['All-In Attach %'].iloc[0]
-
                 improvements.append({
-                    'Rep': rep_name,
-                    'Conversion Before': prev_conversion,
-                    'Conversion Now': current_conversion,
-                    'Conversion Change': current_conversion - prev_conversion,
-                    'LT Attach Before': prev_lt,
-                    'LT Attach Now': current_lt,
-                    'LT Attach Change': current_lt - prev_lt,
-                    'All-In Attach Before': prev_attach,
-                    'All-In Attach Now': current_attach,
-                    'All-In Attach Change': current_attach - prev_attach
+                    'Rep':                  rep_name,
+                    'Conversion Before':    a['Conversion'].iloc[0],
+                    'Conversion Now':       b['Conversion'].iloc[0],
+                    'Conversion Change':    b['Conversion'].iloc[0] - a['Conversion'].iloc[0],
+                    'LT Attach Before':     a['LT Attach'].iloc[0],
+                    'LT Attach Now':        b['LT Attach'].iloc[0],
+                    'LT Attach Change':     b['LT Attach'].iloc[0] - a['LT Attach'].iloc[0],
+                    'All-In Attach Before': a['All-In Attach %'].iloc[0],
+                    'All-In Attach Now':    b['All-In Attach %'].iloc[0],
+                    'All-In Attach Change': b['All-In Attach %'].iloc[0] - a['All-In Attach %'].iloc[0],
                 })
 
         if improvements:
             imp_df = pd.DataFrame(improvements)
             for col in ['Conversion Change', 'LT Attach Change', 'All-In Attach Change']:
-                imp_df[col] = imp_df[col].map(lambda x: f"⬆️ {x:.1f}%" if x > 0 else (f"⬇️ {abs(x):.1f}%" if x < 0 else "—"))
-
+                imp_df[col] = imp_df[col].map(
+                    lambda x: f"⬆️ {x:.1f}%" if x > 0 else (f"⬇️ {abs(x):.1f}%" if x < 0 else "—")
+                )
             st.dataframe(imp_df, use_container_width=True)
 
-        # 🎯 Most Improved Shoutout + Honorable Mentions
-        shout_metrics = ['Conversion Change', 'LT Attach Change', 'All-In Attach Change']
-        improvement_scores = []
-
-        if improvements:
+            improvement_scores = []
+            shout_metrics = ['Conversion Change', 'LT Attach Change', 'All-In Attach Change']
             for _, row in imp_df.iterrows():
-                score = 0
-                for metric in shout_metrics:
-                    if '⬆️' in row[metric]:
-                        score += float(row[metric].replace('⬆️','').replace('%','').strip())
+                score = sum(
+                    float(row[m].replace('⬆️', '').replace('%', '').strip())
+                    for m in shout_metrics if '⬆️' in str(row[m])
+                )
                 improvement_scores.append((row['Rep'], score))
 
             if improvement_scores:
-                sorted_improvers = sorted(improvement_scores, key=lambda x: x[1], reverse=True)
-                most_improved_rep, top_score = sorted_improvers[0]
-
+                sorted_improvers    = sorted(improvement_scores, key=lambda x: x[1], reverse=True)
+                most_improved_rep, _ = sorted_improvers[0]
                 st.markdown(
-                    f"""### 🌟 **Most Improved Agent**  
-                    Massive congrats to **{most_improved_rep}**, who made the biggest leap in performance — you're leveling up like a legend! 🚀"""
+                    f"### 🌟 **Most Improved Agent**\n"
+                    f"Massive congrats to **{most_improved_rep}** — you're leveling up like a legend! 🚀"
                 )
+                honorable = sorted_improvers[1:4]
+                if honorable:
+                    st.markdown(
+                        "🏅 **Honorable Mentions:** "
+                        + " • ".join(f"**{r}** ({s:.1f}%)" for r, s in honorable)
+                    )
 
-                # Honorable Mentions
-                honorable_mentions = sorted_improvers[1:4]  # up to 3
-                if honorable_mentions:
-                    shout_lines = [f"**{rep}** (Total Gain: {score:.1f}%)" for rep, score in honorable_mentions]
-                    shout_text = " • ".join(shout_lines)
-                    st.markdown(f"🏅 **Honorable Mentions:** {shout_text}")
-
-        # ──────────────────────────────────────────────
+        # ----------------------------------------------------------------
         # 📋 TEAM QA BREAKDOWN
-        # ──────────────────────────────────────────────
+        # ----------------------------------------------------------------
         st.subheader("📋 Team QA Breakdown")
-
         _tl_cache_bust = datetime.now(eastern).strftime("%Y-%m-%d-%H")
         with st.spinner("Loading QA data..."):
             _tl_qa_raw, _tl_qa_err = load_qa_data(_tl_cache_bust)
@@ -3870,7 +3928,6 @@ if page == "👩‍💻 Team Lead Dashboard":
             if _tl_qa_err:
                 st.error(f"Error: {_tl_qa_err}")
         else:
-            # Build set of canonical agent names for reps on this team
             _tl_teams_names = load_teams_new_names(_tl_cache_bust)
             _team_rep_names = set()
             for _, _tr in team_df.iterrows():
@@ -3892,28 +3949,24 @@ if page == "👩‍💻 Team Lead Dashboard":
                 _tl_avail = sorted(_tl_qa_df['_month'].dropna().unique(), reverse=True)
 
                 _tl_sel_month_str = st.selectbox(
-                    "📅 Select month",
-                    [str(m) for m in _tl_avail],
-                    key="tl_qa_month_select",
+                    "📅 Select month", [str(m) for m in _tl_avail], key="tl_qa_month_select"
                 )
                 _tl_sel_period = pd.Period(_tl_sel_month_str, freq='M')
-                _tl_month_df = _tl_qa_df[_tl_qa_df['_month'] == _tl_sel_period].copy()
+                _tl_month_df   = _tl_qa_df[_tl_qa_df['_month'] == _tl_sel_period].copy()
 
-                # Team-level score cards for selected month
                 _tl_m_avg = _tl_month_df[_score_col_tl].dropna().mean()
-                _tl_h1 = _tl_month_df[_tl_month_df['_scoring_week'].dt.day <= 15][_score_col_tl].dropna()
-                _tl_h2 = _tl_month_df[_tl_month_df['_scoring_week'].dt.day > 15][_score_col_tl].dropna()
+                _tl_h1    = _tl_month_df[_tl_month_df['_scoring_week'].dt.day <= 15][_score_col_tl].dropna()
+                _tl_h2    = _tl_month_df[_tl_month_df['_scoring_week'].dt.day > 15][_score_col_tl].dropna()
 
                 _tc1, _tc2, _tc3 = st.columns(3)
-                _tc1.metric("Team Monthly Avg",  f"{_tl_m_avg:.1f}%" if not pd.isna(_tl_m_avg) else "—")
-                _tc2.metric("1st–15th Avg",      f"{_tl_h1.mean():.1f}%" if len(_tl_h1) > 0 else "—",
+                _tc1.metric("Team Monthly Avg", f"{_tl_m_avg:.1f}%" if not pd.isna(_tl_m_avg) else "—")
+                _tc2.metric("1st–15th Avg",     f"{_tl_h1.mean():.1f}%" if len(_tl_h1) > 0 else "—",
                             help="PIP EOR first-half period")
-                _tc3.metric("16th–End Avg",      f"{_tl_h2.mean():.1f}%" if len(_tl_h2) > 0 else "—",
+                _tc3.metric("16th–End Avg",     f"{_tl_h2.mean():.1f}%" if len(_tl_h2) > 0 else "—",
                             help="PIP EOR second-half period")
 
-                # 3-month bi-monthly breakdown — team average
                 st.markdown("##### 📊 Last 3 Months — Team Average")
-                _tl_recent_3 = sorted(_tl_avail, reverse=True)[:3]
+                _tl_recent_3  = sorted(_tl_avail, reverse=True)[:3]
                 _tl_breakdown = []
                 for _tp in _tl_recent_3:
                     _tmd = _tl_qa_df[_tl_qa_df['_month'] == _tp]
@@ -3929,14 +3982,13 @@ if page == "👩‍💻 Team Lead Dashboard":
                     })
                 st.dataframe(pd.DataFrame(_tl_breakdown), use_container_width=True, hide_index=True)
 
-                # Per-rep breakdown for selected month
                 st.markdown("##### 👤 Per-Rep Breakdown")
                 _rep_rows = []
                 for _agent_name in sorted(_tl_month_df['Agent'].dropna().unique()):
                     _rep_df = _tl_month_df[_tl_month_df['Agent'] == _agent_name]
-                    _rh1 = _rep_df[_rep_df['_scoring_week'].dt.day <= 15][_score_col_tl].dropna()
-                    _rh2 = _rep_df[_rep_df['_scoring_week'].dt.day > 15][_score_col_tl].dropna()
-                    _rma = _rep_df[_score_col_tl].dropna().mean()
+                    _rh1    = _rep_df[_rep_df['_scoring_week'].dt.day <= 15][_score_col_tl].dropna()
+                    _rh2    = _rep_df[_rep_df['_scoring_week'].dt.day > 15][_score_col_tl].dropna()
+                    _rma    = _rep_df[_score_col_tl].dropna().mean()
                     _rep_rows.append({
                         "Agent":        _agent_name,
                         "1st–15th Avg": f"{_rh1.mean():.1f}%" if len(_rh1) > 0 else "—",
@@ -3947,9 +3999,10 @@ if page == "👩‍💻 Team Lead Dashboard":
                 if _rep_rows:
                     st.dataframe(pd.DataFrame(_rep_rows), use_container_width=True, hide_index=True)
 
-        # ──────────────────────────────────────────────
+        # ----------------------------------------------------------------
         # 📊 HALF-MONTH PERFORMANCE REVIEW (PIP)
-        # ──────────────────────────────────────────────
+        # Uses QUARTERLY PIP GOALS — separate from bonus goals above
+        # ----------------------------------------------------------------
         st.markdown("---")
         st.subheader("📊 Half-Month Performance Review")
 
@@ -3968,23 +4021,62 @@ if page == "👩‍💻 Team Lead Dashboard":
                    'Jul':7,'Aug':8,'Sep':9,'Oct':10,'Nov':11,'Dec':12}
             return (int(p[2]), _mm.get(p[0], 0), 0 if p[1].startswith('1') else 1)
 
-        # Filter history to this team
         _pip_h = history_df[
-            history_df['Manager_Direct'].str.strip().str.lower() == selected_lead.strip().lower()
+            history_df['Manager_Direct'].str.strip().str.lower()
+            == selected_lead.strip().lower()
         ].copy()
         _pip_h['Date'] = pd.to_datetime(_pip_h['Date'], errors='coerce')
-        for _pc in ['Wins','Calls','Lawn Treatment','Mosquito','Bush Trimming','Flower Bed Weeding','Leaf Removal']:
+        for _pc in ['Wins','Calls','Lawn Treatment','Mosquito',
+                    'Bush Trimming','Flower Bed Weeding','Leaf Removal']:
             _pip_h[_pc] = pd.to_numeric(_pip_h[_pc], errors='coerce').fillna(0)
         _pip_h['_period'] = _pip_h['Date'].apply(_pip_label)
 
         _pip_all_periods = sorted(
             [p for p in _pip_h['_period'].dropna().unique() if p],
-            key=_pip_sort, reverse=True
+            key=_pip_sort, reverse=True,
         )
 
         if not _pip_all_periods:
             st.info("No historical data found for this team yet.")
         else:
+            # ── Load quarterly PIP goals for this period ──────────────────
+            _pip_q_goals = load_quarterly_pip_goals(cache_bust_key)
+
+            # Priority: monthly goal > quarterly goal > bonus base (last resort)
+            _pip_goal_conv   = (
+                _pip_q_goals.get('month',   {}).get('conv')
+                or _pip_q_goals.get('quarter', {}).get('conv')
+                or BASE_CONV
+            )
+            _pip_goal_attach = (
+                _pip_q_goals.get('month',   {}).get('attach')
+                or _pip_q_goals.get('quarter', {}).get('attach')
+                or BASE_ATTACH
+            )
+            _pip_goal_lt = (
+                _pip_q_goals.get('month',   {}).get('lt')
+                or _pip_q_goals.get('quarter', {}).get('lt')
+                or BASE_LT
+            )
+            _pip_goal_qa = (
+                _pip_q_goals.get('month',   {}).get('qa')
+                or _pip_q_goals.get('quarter', {}).get('qa')
+                or BASE_QA
+            )
+
+            # Human-readable label for caption
+            if _pip_q_goals.get('month'):
+                _pip_goal_label = (
+                    f"{_pip_q_goals['month']['label']} monthly PIP goal"
+                )
+            elif _pip_q_goals.get('quarter'):
+                _pip_goal_label = (
+                    f"{_pip_q_goals['quarter']['label']} quarterly PIP goal"
+                )
+            else:
+                _pip_goal_label = "bonus base tier (PIP goals not found)"
+
+            # ── Period selector ───────────────────────────────────────────
             _pip_c1, _pip_c2 = st.columns([3, 1])
             with _pip_c1:
                 _pip_sel = st.selectbox(
@@ -3993,25 +4085,36 @@ if page == "👩‍💻 Team Lead Dashboard":
             with _pip_c2:
                 _pip_trend_n = st.slider("Trend periods", 2, 8, 6, key="pip_trend_n")
 
-            # ── Per-rep table for selected period ──
+            # ── Per-rep table for selected period ─────────────────────────
             _pip_period_h = _pip_h[_pip_h['_period'] == _pip_sel]
-            _pip_grp = _pip_period_h.groupby(['First_Name','Last_Name','Rep'], as_index=False).agg(
+            _pip_grp = _pip_period_h.groupby(
+                ['First_Name', 'Last_Name', 'Rep'], as_index=False
+            ).agg(
                 Wins=('Wins','sum'), Calls=('Calls','sum'),
                 LT=('Lawn Treatment','sum'), Mosquito=('Mosquito','sum'),
                 Bush=('Bush Trimming','sum'), Flower=('Flower Bed Weeding','sum'),
-                Leaf=('Leaf Removal','sum')
+                Leaf=('Leaf Removal','sum'),
             )
-            _pip_grp['Name']    = _pip_grp['First_Name'].str.strip() + ' ' + _pip_grp['Last_Name'].str.strip()
-            _pip_grp['Conv%']   = (_pip_grp['Wins'] / _pip_grp['Calls'].replace(0, np.nan) * 100).round(1).fillna(0)
-            _pip_grp['LT%']     = (_pip_grp['LT']   / _pip_grp['Wins'].replace(0, np.nan) * 100).round(1).fillna(0)
+            _pip_grp['Name']    = (
+                _pip_grp['First_Name'].str.strip() + ' ' +
+                _pip_grp['Last_Name'].str.strip()
+            )
+            _pip_grp['Conv%']   = (
+                _pip_grp['Wins'] / _pip_grp['Calls'].replace(0, np.nan) * 100
+            ).round(1).fillna(0)
+            _pip_grp['LT%']     = (
+                _pip_grp['LT'] / _pip_grp['Wins'].replace(0, np.nan) * 100
+            ).round(1).fillna(0)
             _pip_all_att        = _pip_grp[['LT','Mosquito','Bush','Flower','Leaf']].sum(axis=1)
-            _pip_grp['Attach%'] = (_pip_all_att / _pip_grp['Wins'].replace(0, np.nan) * 100).round(1).fillna(0)
+            _pip_grp['Attach%'] = (
+                _pip_all_att / _pip_grp['Wins'].replace(0, np.nan) * 100
+            ).round(1).fillna(0)
 
-            # ── QA for selected period ──
+            # QA for selected period
             _pip_qa_scores = {}
             if not _tl_qa_raw.empty:
-                _pip_sc = 'New Score' if 'New Score' in _tl_qa_raw.columns else 'Score'
-                _pip_pp = _pip_sel.split()   # e.g. ["May", "1-15", "2026"]
+                _pip_sc  = 'New Score' if 'New Score' in _tl_qa_raw.columns else 'Score'
+                _pip_pp  = _pip_sel.split()   # ["May", "1-15", "2026"]
                 if len(_pip_pp) == 3:
                     _pip_mm = {'Jan':1,'Feb':2,'Mar':3,'Apr':4,'May':5,'Jun':6,
                                'Jul':7,'Aug':8,'Sep':9,'Oct':10,'Nov':11,'Dec':12}
@@ -4027,8 +4130,7 @@ if page == "👩‍💻 Team Lead Dashboard":
                         (_tl_qa_raw['_scoring_week'].dt.day.between(_pip_dstart, _pip_dend))
                     ].copy()
 
-                    _pip_tn = load_teams_new_names(_tl_cache_bust)
-                    # Build agent-name → rep-name lookup for this team
+                    _pip_tn     = load_teams_new_names(_tl_cache_bust)
                     _pip_ag_map = {}
                     for _, _pr in _pip_grp.iterrows():
                         _nm = _pr['Name'].strip().lower()
@@ -4039,33 +4141,43 @@ if page == "👩‍💻 Team Lead Dashboard":
                         _pip_qa_filt['Agent'].str.strip().str.lower().isin(_pip_ag_map)
                     ]
                     for _ag_key, _rep_nm in _pip_ag_map.items():
-                        _ag_rows = _pip_qa_filt[_pip_qa_filt['Agent'].str.strip().str.lower() == _ag_key]
+                        _ag_rows = _pip_qa_filt[
+                            _pip_qa_filt['Agent'].str.strip().str.lower() == _ag_key
+                        ]
                         if not _ag_rows.empty:
-                            _pip_qa_scores[_rep_nm] = round(_ag_rows[_pip_sc].dropna().mean(), 1)
+                            _pip_qa_scores[_rep_nm] = round(
+                                _ag_rows[_pip_sc].dropna().mean(), 1
+                            )
 
             _pip_grp['QA%'] = _pip_grp['Name'].map(_pip_qa_scores)
 
-            # ── Display ──
-            _pip_disp = _pip_grp[['Name','Wins','Calls','Conv%','LT%','Attach%','QA%']].copy()
+            # ── Display ───────────────────────────────────────────────────
+            _pip_disp = _pip_grp[
+                ['Name','Wins','Calls','Conv%','LT%','Attach%','QA%']
+            ].copy()
             _pip_disp = _pip_disp.sort_values('Conv%', ascending=False).reset_index(drop=True)
 
             def _pip_bg(val, goal):
                 if pd.isna(val) or val == 0: return ''
-                if val >= goal:          return 'background-color: rgba(76,175,80,0.25)'
-                elif val >= goal * 0.9:  return 'background-color: rgba(255,152,0,0.25)'
-                else:                    return 'background-color: rgba(244,67,54,0.25)'
+                if val >= goal:              return 'background-color:rgba(76,175,80,0.25)'
+                elif val >= goal * 0.9:      return 'background-color:rgba(255,152,0,0.25)'
+                else:                        return 'background-color:rgba(244,67,54,0.25)'
 
             _pip_styled = (
                 _pip_disp.style
-                .map(lambda v: _pip_bg(v, BASE_CONV),   subset=['Conv%'])
-                .map(lambda v: _pip_bg(v, BASE_LT),     subset=['LT%'])
-                .map(lambda v: _pip_bg(v, BASE_ATTACH), subset=['Attach%'])
-                .map(lambda v: _pip_bg(v, BASE_QA) if pd.notna(v) else '', subset=['QA%'])
+                .map(lambda v: _pip_bg(v, _pip_goal_conv),   subset=['Conv%'])
+                .map(lambda v: _pip_bg(v, _pip_goal_lt),     subset=['LT%'])
+                .map(lambda v: _pip_bg(v, _pip_goal_attach), subset=['Attach%'])
+                .map(lambda v: _pip_bg(v, _pip_goal_qa) if pd.notna(v) else '', subset=['QA%'])
             )
 
+            # Caption clearly states WHICH goal set is being used
             st.caption(
-                f"🎯 Base goals: Conv ≥{BASE_CONV:.0f}% · "
-                f"LT ≥{BASE_LT:.1f}% · Attach ≥{BASE_ATTACH:.0f}% · QA ≥{BASE_QA:.0f}%  |  "
+                f"🎯 PIP goals ({_pip_goal_label}): "
+                f"Conv ≥{_pip_goal_conv:.0f}% · "
+                f"LT ≥{_pip_goal_lt:.1f}% · "
+                f"Attach ≥{_pip_goal_attach:.0f}% · "
+                f"QA ≥{_pip_goal_qa:.0f}%  |  "
                 f"🟢 at/above  🟡 within 10%  🔴 below"
             )
             st.dataframe(
@@ -4079,39 +4191,34 @@ if page == "👩‍💻 Team Lead Dashboard":
                     'QA%':     st.column_config.NumberColumn("QA%",     format="%.1f%%"),
                     'Wins':    st.column_config.NumberColumn("Wins",    format="%d"),
                     'Calls':   st.column_config.NumberColumn("Calls",   format="%d"),
-                }
+                },
             )
 
-            # ── Team trend table ──
+            # ── Team trend table ──────────────────────────────────────────
             st.markdown(f"**Team Averages — Last {_pip_trend_n} Periods**")
             _pip_trend_rows = []
             for _tp in _pip_all_periods[:_pip_trend_n]:
                 _tph = _pip_h[_pip_h['_period'] == _tp]
                 _tw  = _tph['Wins'].sum()
                 _tc  = _tph['Calls'].sum()
-                _ta  = _tph[['Lawn Treatment','Mosquito','Bush Trimming','Flower Bed Weeding','Leaf Removal']].sum().sum()
+                _ta  = _tph[['Lawn Treatment','Mosquito','Bush Trimming',
+                              'Flower Bed Weeding','Leaf Removal']].sum().sum()
                 _tlt = _tph['Lawn Treatment'].sum()
                 _pip_trend_rows.append({
-                    'Period':    _tp,
-                    'Wins':      int(_tw),
-                    'Calls':     int(_tc),
-                    'Conv%':     round(_tw / _tc * 100, 1) if _tc > 0 else 0.0,
-                    'LT%':       round(_tlt / _tw * 100, 1) if _tw > 0 else 0.0,
-                    'Attach%':   round(_ta  / _tw * 100, 1) if _tw > 0 else 0.0,
+                    'Period':  _tp,
+                    'Wins':    int(_tw),
+                    'Calls':   int(_tc),
+                    'Conv%':   round(_tw / _tc * 100, 1) if _tc > 0 else 0.0,
+                    'LT%':     round(_tlt / _tw * 100, 1) if _tw > 0 else 0.0,
+                    'Attach%': round(_ta  / _tw * 100, 1) if _tw > 0 else 0.0,
                 })
             _pip_trend_df = pd.DataFrame(_pip_trend_rows)
 
-            def _pip_trend_bg(val, goal):
-                if pd.isna(val) or val == 0: return ''
-                if val >= goal:         return 'background-color: rgba(76,175,80,0.25)'
-                elif val >= goal * 0.9: return 'background-color: rgba(255,152,0,0.25)'
-                else:                   return 'background-color: rgba(244,67,54,0.25)'
-
             _pip_trend_styled = (
                 _pip_trend_df.style
-                .map(lambda v: _pip_trend_bg(v, BASE_CONV),   subset=['Conv%'])
-                .map(lambda v: _pip_trend_bg(v, BASE_LT),     subset=['LT%'])
-                .map(lambda v: _pip_trend_bg(v, BASE_ATTACH), subset=['Attach%'])
+                .map(lambda v: _pip_bg(v, _pip_goal_conv),   subset=['Conv%'])
+                .map(lambda v: _pip_bg(v, _pip_goal_lt),     subset=['LT%'])
+                .map(lambda v: _pip_bg(v, _pip_goal_attach), subset=['Attach%'])
             )
             st.dataframe(
                 _pip_trend_styled,
@@ -4123,25 +4230,26 @@ if page == "👩‍💻 Team Lead Dashboard":
                     'Attach%': st.column_config.NumberColumn("Attach%", format="%.1f%%"),
                     'Wins':    st.column_config.NumberColumn("Wins",    format="%d"),
                     'Calls':   st.column_config.NumberColumn("Calls",   format="%d"),
-                }
+                },
             )
 
-            # ── Monthly summary ──
+            # ── Monthly summary ───────────────────────────────────────────
             st.markdown("**Monthly Summary — Team Totals**")
             _pip_h['_month'] = _pip_h['Date'].dt.to_period('M')
-            _pip_months = sorted(_pip_h['_month'].dropna().unique(), reverse=True)[:6]
-            _pip_month_rows = []
+            _pip_months      = sorted(_pip_h['_month'].dropna().unique(), reverse=True)[:6]
+            _pip_month_rows  = []
             for _tm in _pip_months:
                 _tmh = _pip_h[_pip_h['_month'] == _tm]
                 _mw  = _tmh['Wins'].sum()
                 _mc  = _tmh['Calls'].sum()
-                _ma  = _tmh[['Lawn Treatment','Mosquito','Bush Trimming','Flower Bed Weeding','Leaf Removal']].sum().sum()
+                _ma  = _tmh[['Lawn Treatment','Mosquito','Bush Trimming',
+                              'Flower Bed Weeding','Leaf Removal']].sum().sum()
                 _mlt = _tmh['Lawn Treatment'].sum()
-                # QA for this month from already-loaded raw QA
+                # QA for this month
                 _mqa = np.nan
                 if not _tl_qa_raw.empty:
-                    _pip_msc = 'New Score' if 'New Score' in _tl_qa_raw.columns else 'Score'
-                    _pip_mtn = load_teams_new_names(_tl_cache_bust)
+                    _pip_msc  = 'New Score' if 'New Score' in _tl_qa_raw.columns else 'Score'
+                    _pip_mtn  = load_teams_new_names(_tl_cache_bust)
                     _pip_team_agents = set()
                     for _, _mtr in _pip_grp.iterrows():
                         _mnm = _mtr['Name'].strip().lower()
@@ -4165,10 +4273,10 @@ if page == "👩‍💻 Team Lead Dashboard":
             _pip_month_df = pd.DataFrame(_pip_month_rows)
             _pip_month_styled = (
                 _pip_month_df.style
-                .map(lambda v: _pip_trend_bg(v, BASE_CONV),   subset=['Conv%'])
-                .map(lambda v: _pip_trend_bg(v, BASE_LT),     subset=['LT%'])
-                .map(lambda v: _pip_trend_bg(v, BASE_ATTACH), subset=['Attach%'])
-                .map(lambda v: _pip_trend_bg(v, BASE_QA) if pd.notna(v) else '', subset=['QA%'])
+                .map(lambda v: _pip_bg(v, _pip_goal_conv),   subset=['Conv%'])
+                .map(lambda v: _pip_bg(v, _pip_goal_lt),     subset=['LT%'])
+                .map(lambda v: _pip_bg(v, _pip_goal_attach), subset=['Attach%'])
+                .map(lambda v: _pip_bg(v, _pip_goal_qa) if pd.notna(v) else '', subset=['QA%'])
             )
             st.dataframe(
                 _pip_month_styled,
@@ -4181,7 +4289,7 @@ if page == "👩‍💻 Team Lead Dashboard":
                     'QA%':     st.column_config.NumberColumn("QA%",     format="%.1f%%"),
                     'Wins':    st.column_config.NumberColumn("Wins",    format="%d"),
                     'Calls':   st.column_config.NumberColumn("Calls",   format="%d"),
-                }
+                },
             )
 
 # ----------------------------
@@ -4818,5 +4926,3 @@ if page == "📋 My QA":
         f'</table></div>',
         unsafe_allow_html=True,
     )
-
-
