@@ -3344,47 +3344,65 @@ if page == "👩‍💻 Team Lead Dashboard":
     @st.cache_data(show_spinner=False, ttl=3600)
     def load_quarterly_pip_goals(_cache_bust_key: str) -> dict:
         """
-        Reads the right-hand 'Quarterly' section of the Cycles/Goals/Scales sheet.
-
-        Returns a dict with up to two keys:
-          'quarter' -> {label, conv, attach, lt, qa}   (e.g. Q2 containing today's month)
-          'month'   -> {label, conv, attach, lt, qa}   (e.g. 'May' row)
-
-        Priority for PIP thresholds: month > quarter > bonus base (fallback).
+        Reads the Quarterly Goals section (cols 31-35) of the Cycles/Goals/Scales sheet.
+        Col 31 = label (Q1/Q2/Q3/Q4 or month name)
+        Col 32 = Conversion, Col 33 = Attach, Col 34 = LT, Col 35 = QA
         """
-        import re as _re
-
         QUARTER_LABELS = {'Q1', 'Q2', 'Q3', 'Q4'}
         MONTH_NAMES = {
-            'January', 'February', 'March', 'April', 'May', 'June',
-            'July', 'August', 'September', 'October', 'November', 'December',
-            'Jan', 'Feb', 'Mar', 'Apr', 'Jun', 'Jul', 'Aug',
-            'Sep', 'Oct', 'Nov', 'Dec',
+            'January','February','March','April','May','June',
+            'July','August','September','October','November','December',
+            'Jan','Feb','Mar','Apr','Jun','Jul','Aug',
+            'Sep','Oct','Nov','Dec',
         }
-        # Q → calendar months
         Q_MONTHS = {
-            'Q1': [1, 2, 3], 'Q2': [4, 5, 6],
-            'Q3': [7, 8, 9], 'Q4': [10, 11, 12],
+            'Q1': [1,2,3], 'Q2': [4,5,6],
+            'Q3': [7,8,9], 'Q4': [10,11,12],
         }
 
         def _pv(v):
             try:
-                return float(str(v).replace('%', '').strip())
+                return float(str(v).replace('%','').strip())
             except Exception:
                 return None
 
         try:
             _df = pd.read_csv(_CYCLES_GOALS_URL, header=None, dtype=str).fillna("")
-            n_cols = len(_df.columns)
+            today         = datetime.now().date()
+            cur_month_full = today.strftime('%B')   # "May"
+            cur_month_abbr = today.strftime('%b')   # "May"
+            cur_month_num  = today.month
 
-            # Step 1: find the column that contains "Quarterly" in row 0
-            _qcol = None
-            for ci in range(n_cols):
-                if 'quarterly' in str(_df.iat[0, ci]).strip().lower():
-                    _qcol = ci
+            result = {}
+            for ri in range(len(_df)):
+                if _df.shape[1] < 36:
                     break
-            if _qcol is None:
-                return {}
+                cell = str(_df.iat[ri, 31]).strip()
+                if not cell or cell.lower() == 'nan':
+                    continue
+
+                conv   = _pv(_df.iat[ri, 32])
+                attach = _pv(_df.iat[ri, 33])
+                lt     = _pv(_df.iat[ri, 34])
+                qa     = _pv(_df.iat[ri, 35])
+
+                if cell in QUARTER_LABELS:
+                    if cur_month_num in Q_MONTHS.get(cell, []):
+                        result['quarter'] = {
+                            'label': cell,
+                            'conv': conv, 'attach': attach, 'lt': lt, 'qa': qa,
+                        }
+                elif cell in MONTH_NAMES:
+                    if cell in (cur_month_full, cur_month_abbr):
+                        result['month'] = {
+                            'label': cell,
+                            'conv': conv, 'attach': attach, 'lt': lt, 'qa': qa,
+                        }
+
+            return result
+
+        except Exception:
+            return {}
 
             # Step 2: find Conversion / Attach / LT / QA column indices
             # from the header row (row index 1) to the RIGHT of _qcol
