@@ -1225,12 +1225,16 @@ def _fetch_qa_data_fresh() -> tuple:
         _hdrs = {"Authorization": f"Bearer {_creds.token}"}
 
         # Sheets API /values endpoint accepts service-account Bearer tokens (unlike /export).
-        # timeout=(connect_s, read_s) — 5s to connect, 45s to receive full response.
+        # UNFORMATTED_VALUE skips Google's server-side number-formatting pass — major speedup on big sheets.
+        # FORMATTED_STRING keeps date/time columns human-readable so downstream pd.to_datetime still works.
+        # timeout=(connect_s, read_s) — 5s to connect, 120s to receive full response.
         _api_url = (
             f"https://sheets.googleapis.com/v4/spreadsheets/{_QA_SHEET_ID}"
             f"/values/{_QA_SHEET_TAB}"
+            f"?valueRenderOption=UNFORMATTED_VALUE"
+            f"&dateTimeRenderOption=FORMATTED_STRING"
         )
-        _resp = _session.get(_api_url, headers=_hdrs, timeout=(5, 45))
+        _resp = _session.get(_api_url, headers=_hdrs, timeout=(5, 120))
         _resp.raise_for_status()
         _values = _resp.json().get("values", [])
         if len(_values) < 2:
