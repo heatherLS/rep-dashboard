@@ -2878,6 +2878,7 @@ if page == "💰Bonus & History":
             _lc_attach_svcs = [c for c in ['Lawn Treatment','Mosquito','Bush Trimming','Flower Bed Weeding','Leaf Removal','Pool'] if c in _lc_rep_hist.columns]
             _lc_total_attach = sum(pd.to_numeric(_lc_rep_hist[c], errors='coerce').fillna(0).sum() for c in _lc_attach_svcs)
             _lc_attach = (_lc_total_attach / _lc_wins * 100) if _lc_wins > 0 else None
+            _lc_lt = pd.to_numeric(_lc_rep_hist['Lawn Treatment'], errors='coerce').fillna(0).sum() if 'Lawn Treatment' in _lc_rep_hist.columns else 0
 
             _lc_metrics = {
                 'Conversion':    _lc_conv   if _lc_conv   is not None else 0.0,
@@ -2895,6 +2896,13 @@ if page == "💰Bonus & History":
                 f"**Total Points: {_lc_total}** "
                 f"*(Conv: {_lc_pts['Conversion']} + Attach: {_lc_pts['All-In Attach']} + QA: {_lc_pts['QA']})*"
             )
+
+            # Raw counts from last cycle (Calls / Wins / Attaches / LT)
+            _lc_c1, _lc_c2, _lc_c3, _lc_c4 = st.columns(4)
+            _lc_c1.metric("Calls",      f"{int(_lc_calls):,}")
+            _lc_c2.metric("Wins",       f"{int(_lc_wins):,}")
+            _lc_c3.metric("Attaches",   f"{int(_lc_total_attach):,}")
+            _lc_c4.metric("Lawn Treatments", f"{int(_lc_lt):,}")
 
             _lc_goals = {
                 'Conversion':    _lc_info.get('conv_goal'),
