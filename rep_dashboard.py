@@ -1209,112 +1209,42 @@ def load_teams_new_names(_cache_bust_key: str) -> dict:
     except Exception:
         return {}
 
-_QA_DISK_CACHE_PATH    = "/tmp/qa_cache.pkl"
-_QA_DISK_CACHE_MAX_AGE = 86400  # 24h — force full refresh to reconcile any edits/deletes in the sheet
-
-def _qa_post_process(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize column names + derive helper columns. Applied to both full and incremental fetches."""
-    df.columns = [re.sub(r'\s+', ' ', c).strip() for c in df.columns]
-    df['_ts'] = pd.to_datetime(df.get('Timestamp', pd.Series(dtype=str)), errors='coerce')
-    df['_scoring_week'] = pd.to_datetime(df.get('Scoring Week', pd.Series(dtype=str)), errors='coerce')
-    for _col in ['New Score', 'Score', 'Old Score']:
-        if _col in df.columns:
-            df[_col] = pd.to_numeric(df[_col], errors='coerce')
-    return df
-
 def _fetch_qa_data_fresh() -> tuple:
-    """Fetch QA data via Sheets API. Incremental: only pulls rows added since the last fetch
-    (cached to /tmp/qa_cache.pkl). Falls back to a full fetch when the cache is missing,
-    older than 24h, or the sheet's header shape changes. 90s read timeout, 1 retry on timeout."""
+    """Fetch QA data via Sheets API JSON endpoint with explicit per-call timeouts."""
     import requests as _req
-    import time as _time
-    import os as _os
-    import pickle as _pickle
     from google.oauth2.service_account import Credentials as SACredentials
     from google.auth.transport.requests import Request as GARequest
-
     try:
         _sa = dict(st.secrets["gcp_service_account"])
         _creds = SACredentials.from_service_account_info(
             _sa, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
         )
         _session = _req.Session()
+        # GARequest constructor has no timeout kwarg in older google-auth — don't pass it.
         _creds.refresh(GARequest(session=_session))
         _hdrs = {"Authorization": f"Bearer {_creds.token}"}
-        _common_qs = "valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING"
 
-        def _do_get(url: str):
-            """GET with 5s connect, 90s read, and 1 retry on read-timeout."""
-            for _attempt in range(2):
-                try:
-                    _r = _session.get(url, headers=_hdrs, timeout=(5, 90))
-                    _r.raise_for_status()
-                    return _r
-                except _req.exceptions.ReadTimeout:
-                    if _attempt == 0:
-                        _time.sleep(2)
-                        continue
-                    raise
-
-        # Try incremental fetch using disk cache
-        _cached = None
-        try:
-            if _os.path.exists(_QA_DISK_CACHE_PATH):
-                _age = _time.time() - _os.path.getmtime(_QA_DISK_CACHE_PATH)
-                if _age < _QA_DISK_CACHE_MAX_AGE:
-                    with open(_QA_DISK_CACHE_PATH, "rb") as _f:
-                        _cached = _pickle.load(_f)  # {"headers": [...], "rows": [[...], ...]}
-        except Exception:
-            _cached = None
-
-        if _cached and isinstance(_cached, dict) and _cached.get("headers") and _cached.get("rows") is not None:
-            _headers = _cached["headers"]
-            _rows = _cached["rows"]
-            _start_row = len(_rows) + 2  # +1 for 1-indexed, +1 to skip header row
-            _api_url = (
-                f"https://sheets.googleapis.com/v4/spreadsheets/{_QA_SHEET_ID}"
-                f"/values/{_QA_SHEET_TAB}!A{_start_row}:ZZ"
-                f"?{_common_qs}"
-            )
-            _resp = _do_get(_api_url)
-            _new_values = _resp.json().get("values", []) or []
-            # Sanity check the sheet hasn't grown a new column since our last full fetch.
-            # If any incoming row is wider than our cached header count, fall back to full fetch
-            # so we pick up the new column header from row 1.
-            _hdr_count = len(_headers)
-            if _new_values and any(len(r) > _hdr_count for r in _new_values):
-                _cached = None  # forces full-fetch path below
-            else:
-                # Pad short rows, append, persist, post-process.
-                _padded_new = [r + [""] * (_hdr_count - len(r)) for r in _new_values]
-                _rows = _rows + _padded_new
-                try:
-                    with open(_QA_DISK_CACHE_PATH, "wb") as _f:
-                        _pickle.dump({"headers": _headers, "rows": _rows}, _f)
-                except Exception:
-                    pass
-                df = pd.DataFrame(_rows, columns=_headers)
-                return _qa_post_process(df), None
-
-        # Full fetch (first call, cache stale/missing, or schema-mismatch fallback)
+        # Sheets API /values endpoint accepts service-account Bearer tokens (unlike /export).
+        # timeout=(connect_s, read_s) — 5s to connect, 45s to receive full response.
         _api_url = (
             f"https://sheets.googleapis.com/v4/spreadsheets/{_QA_SHEET_ID}"
             f"/values/{_QA_SHEET_TAB}"
-            f"?{_common_qs}"
         )
-        _resp = _do_get(_api_url)
+        _resp = _session.get(_api_url, headers=_hdrs, timeout=(5, 45))
+        _resp.raise_for_status()
         _values = _resp.json().get("values", [])
         if len(_values) < 2:
             return pd.DataFrame(), "Sheet returned no data rows"
         _headers = _values[0]
         _rows = [r + [""] * (len(_headers) - len(r)) for r in _values[1:]]
-        try:
-            with open(_QA_DISK_CACHE_PATH, "wb") as _f:
-                _pickle.dump({"headers": _headers, "rows": _rows}, _f)
-        except Exception:
-            pass
         df = pd.DataFrame(_rows, columns=_headers)
-        return _qa_post_process(df), None
+        df.columns = [re.sub(r'\s+', ' ', c).strip() for c in df.columns]
+        df['_ts'] = pd.to_datetime(df.get('Timestamp', pd.Series(dtype=str)), errors='coerce')
+        df['_scoring_week'] = pd.to_datetime(df.get('Scoring Week', pd.Series(dtype=str)), errors='coerce')
+        for col in ['New Score', 'Score', 'Old Score']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        return df, None
     except Exception as e:
         return pd.DataFrame(), str(e)
 
@@ -3714,16 +3644,6 @@ if page == "👩‍💻 Team Lead Dashboard":
         """, unsafe_allow_html=True)
 
         display_df.set_index('Rep', inplace=True)
-
-        # Guard against duplicate rep names — pandas Styler raises KeyError on non-unique index.
-        # Surfaces when a rep has two rows in team_df (e.g., mid-cycle team transfer, dual-queue tag).
-        if not display_df.index.is_unique:
-            dupes = display_df.index[display_df.index.duplicated()].unique().tolist()
-            st.warning(
-                f"⚠️ Duplicate rep entries merged in Rep Breakdown: {', '.join(dupes)}. "
-                f"Investigate the source data — a rep is appearing more than once on this team."
-            )
-            display_df = display_df.groupby(level=0).first()
 
         def highlight_top_nonzero(s):
             is_max = s == s[s > 0].max()
