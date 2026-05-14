@@ -2545,8 +2545,11 @@ if page == "💰Bonus & History":
     if _bonus_has_data:
         row = match.iloc[0]
 
-        # Compute QA from observation sheet (Scoring Week within current cycle)
+        # Compute QA from observation sheet (Scoring Week within current cycle).
+        # _qa_has_obs distinguishes "real 0% score" from "no observations yet" — the latter
+        # should not show as a red ❌ qualifier (demotivating for reps awaiting first eval).
         _bonus_qa_val = percent(row.get('BonusQA', 0))  # fallback
+        _qa_has_obs   = _bonus_qa_val > 0  # if fallback already non-zero, treat as having data
         _bcy_s, _bcy_e = load_cycle_dates(cache_bust_key)
         if _bcy_s and _bcy_e:
             _bqa_raw, _ = load_qa_data(cache_bust_key)
@@ -2556,6 +2559,7 @@ if page == "💰Bonus & History":
                 _bqa_obs = _rep_qa_for_cycle(_bqa_raw, _bcanon, _bcy_s, _bcy_e)
                 if _bqa_obs is not None:
                     _bonus_qa_val = _bqa_obs
+                    _qa_has_obs   = True
 
         # Cycle-to-date raw counts from history sheet (source of truth for attach)
         _cy_hist = load_history(cache_bust_key).copy()
@@ -2643,8 +2647,13 @@ if page == "💰Bonus & History":
             'QA':            (_safe_metric(metrics['QA']),            base_qa_val,     f"{base_qa_val:.0f}%"),
         }
 
-        met_list     = [k for k, (val, base, _) in qualifiers.items() if val >= base]
-        not_met_list = [k for k, (val, base, _) in qualifiers.items() if val < base]
+        # Exclude QA from met/not-met lists when no observations exist yet — it's pending,
+        # neither met nor missed. Coaching messages below use these lists, so omitting QA
+        # here keeps them from telling reps to "fix" QA before they've been evaluated.
+        met_list     = [k for k, (val, base, _) in qualifiers.items()
+                        if val >= base and not (k == 'QA' and not _qa_has_obs)]
+        not_met_list = [k for k, (val, base, _) in qualifiers.items()
+                        if val <  base and not (k == 'QA' and not _qa_has_obs)]
 
         # Visual qualifier checklist
         q_cols = st.columns(3)
@@ -2654,7 +2663,18 @@ if page == "💰Bonus & History":
             met = val >= base
             gap = base - val
             with q_cols[i]:
-                if met:
+                if k == 'QA' and not _qa_has_obs:
+                    # Pending state — neutral indigo card, encouraging copy
+                    st.markdown(
+                        f"<div style='background:rgba(99,102,241,0.10);border:2px solid #6366f1;border-radius:12px;"
+                        f"padding:12px;text-align:center;'>"
+                        f"<div style='font-size:24px;'>⏳</div>"
+                        f"<div style='font-weight:800;'>{k}</div>"
+                        f"<div style='font-size:13px;color:#6366f1;'>Awaiting first observation — keep crushing those calls!</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+                elif met:
                     st.markdown(
                         f"<div style='background:rgba(34,197,94,0.15);border:2px solid #22c55e;border-radius:12px;"
                         f"padding:12px;text-align:center;'>"
@@ -2677,10 +2697,19 @@ if page == "💰Bonus & History":
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # Coaching shoutout
+        # Coaching shoutout — pending QA gets a softer message + a "still pending" suffix
+        # so reps awaiting their first observation aren't told to fix something they can't.
         first = row.get('First_Name', viewed_first)
+        _qa_pending_suffix = "  _QA observations pending — your points will count once your first eval is graded._" if not _qa_has_obs else ""
+
         if not not_met_list:
-            st.success(f"🎉 {first}, you've hit all 3 qualifiers — you're bonus eligible! Keep pushing those points up! 🔥")
+            if not _qa_has_obs:
+                st.success(
+                    f"🎉 {first}, Conversion and All-In Attach base both met! "
+                    f"Your QA points will count toward your bonus once your first observation is graded — keep going strong!"
+                )
+            else:
+                st.success(f"🎉 {first}, you've hit all 3 qualifiers — you're bonus eligible! Keep pushing those points up! 🔥")
         elif len(not_met_list) == 1:
             k = not_met_list[0]
             val, base, need_str = qualifiers[k]
@@ -2690,7 +2719,7 @@ if page == "💰Bonus & History":
             st.warning(
                 f"💪 {first}, you've already met base for **{met_str}** — "
                 f"you just need to get your **{k}** to **{need_str}** "
-                f"({gap:.1f}% away) to unlock your bonus!"
+                f"({gap:.1f}% away) to unlock your bonus!{_qa_pending_suffix}"
             )
         elif len(not_met_list) == 2:
             k1, k2 = not_met_list
@@ -2700,12 +2729,12 @@ if page == "💰Bonus & History":
             prefix = f"You've got **{met_str}** locked in — " if met_str else ""
             st.error(
                 f"📈 {first}, {prefix}focus on **{k1}** (need {need1}) "
-                f"and **{k2}** (need {need2}) to qualify for bonus this cycle."
+                f"and **{k2}** (need {need2}) to qualify for bonus this cycle.{_qa_pending_suffix}"
             )
         else:
             st.error(
-                f"🚨 {first}, none of the 3 qualifiers are met yet — "
-                f"let's focus on Conversion first, then All-In Attach and QA. You've got this!"
+                f"🚨 {first}, none of the qualifiers are met yet — "
+                f"let's focus on Conversion first, then All-In Attach. You've got this!{_qa_pending_suffix}"
             )
 
         # ── LAST CYCLE RECAP ──────────────────────────────────────────────────
