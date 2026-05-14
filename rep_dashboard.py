@@ -3649,6 +3649,20 @@ if page == "👩‍💻 Team Lead Dashboard":
 
         display_df.set_index('Rep', inplace=True)
 
+        # Guard: pandas Styler crashes (KeyError in _update_ctx) on non-unique index/columns.
+        # Surfaces when a rep has two rows in team_df — usually a name-mismatch between sales
+        # and QA trackers (e.g. "Ashley Sagun" vs "Noralyn Sagun"). Dedupe with .first() so the
+        # page still renders; show a warning naming the duplicated rep so it can be fixed upstream
+        # via the Name Matrix sheet.
+        if not display_df.index.is_unique:
+            _dupes = display_df.index[display_df.index.duplicated()].unique().tolist()
+            st.warning(
+                f"⚠️ Duplicate rep entries merged in Rep Breakdown: {', '.join(map(str, _dupes))}. "
+                f"This usually means the rep is listed under different name spellings in the sales "
+                f"vs QA trackers — check the Name Matrix sheet."
+            )
+            display_df = display_df.groupby(level=0).first()
+
         def highlight_top_nonzero(s):
             is_max = s == s[s > 0].max()
             return [
