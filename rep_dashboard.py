@@ -1076,6 +1076,55 @@ def load_last_cycle_info(_cache_bust_key: str):
     except Exception:
         return None
 
+@st.cache_data(show_spinner=False, ttl=3600)
+def load_payout_levels(_cache_bust_key: str):
+    """Returns list of {tier, points, pay, note} from the 'Payout Levels for Total Points'
+    section of the Cycles/Goals/Scales sheet. Scans for the section header so the loader
+    survives row shifts. Falls back to a hard-coded default if the sheet can't be parsed."""
+    _default = [
+        {"tier": "Base",          "points": 0, "pay": 0.0, "note": ""},
+        {"tier": "Green",         "points": 3, "pay": 1.0, "note": "Must hit base on all 3"},
+        {"tier": "Super Green",   "points": 5, "pay": 2.0, "note": "Must hit base on all 3"},
+        {"tier": "Super Duper",   "points": 6, "pay": 3.0, "note": "Must hit base on all 3"},
+        {"tier": "Super D-Duper", "points": 7, "pay": 4.0, "note": "Must hit base on all 3"},
+    ]
+    try:
+        _df = pd.read_csv(_CYCLES_GOALS_URL, header=None, dtype=str).fillna("")
+        _nrows, _ncols = _df.shape
+        _hdr_ri, _hdr_ci = None, None
+        for _r in range(_nrows):
+            for _c in range(_ncols):
+                _val = str(_df.iat[_r, _c]).strip().lower()
+                if "payout levels" in _val and "total points" in _val:
+                    _hdr_ri, _hdr_ci = _r, _c
+                    break
+            if _hdr_ri is not None:
+                break
+        if _hdr_ri is None:
+            return _default
+        # Data starts 2 rows below the header (skip the section title + column-name row).
+        # Columns relative to the section header: tier name, points, pay, optional note.
+        _rows = []
+        for _r in range(_hdr_ri + 2, min(_hdr_ri + 20, _nrows)):
+            _tier = str(_df.iat[_r, _hdr_ci]).strip() if _hdr_ci < _ncols else ""
+            if not _tier:
+                break
+            _pts_raw = str(_df.iat[_r, _hdr_ci + 1]).strip() if _hdr_ci + 1 < _ncols else ""
+            _pay_raw = str(_df.iat[_r, _hdr_ci + 2]).strip() if _hdr_ci + 2 < _ncols else ""
+            _note    = str(_df.iat[_r, _hdr_ci + 3]).strip() if _hdr_ci + 3 < _ncols else ""
+            try:
+                _pts = int(float(_pts_raw))
+            except (ValueError, TypeError):
+                continue
+            try:
+                _pay = float(_pay_raw.replace("$", "").replace(",", "").strip())
+            except (ValueError, TypeError):
+                _pay = 0.0
+            _rows.append({"tier": _tier, "points": _pts, "pay": _pay, "note": _note})
+        return _rows if _rows else _default
+    except Exception:
+        return _default
+
 def _rep_qa_for_cycle(qa_df, agent_name: str, cycle_start, cycle_end):
     """Average New Score for agent where Scoring Week falls in [cycle_start, cycle_end]."""
     if qa_df is None or qa_df.empty or not agent_name or not cycle_start:
@@ -2619,6 +2668,67 @@ if page == "💰Bonus & History":
         raw_bonus = row.get('Bonus Pay', 0)
         hourly = f"${float(raw_bonus):.2f}" if raw_bonus and str(raw_bonus).strip().replace("$", "") != "0" else "$0.00"
         st.markdown(f"**🌼 Points Earned:** {total_points} — **Hourly Forecast:** {hourly}")
+
+        # ── 💵 Payout Levels grid — shows how total points map to hourly bonus ────
+        # Many new hires don't know the points→pay mapping. Loaded from the same
+        # Cycles/Goals/Scales sheet that drives bonus goals, with a hard-coded fallback.
+        _payout_tiers = load_payout_levels(cache_bust_key)
+        if _payout_tiers:
+            _current_idx = -1
+            for _i, _t in enumerate(_payout_tiers):
+                if _bonus_total_pts >= _t["points"]:
+                    _current_idx = _i
+
+            # Green gradient: stronger color for higher tiers, gold border on current tier
+            _row_bg = [
+                "rgba(128,128,128,0.10)",
+                "rgba(34,197,94,0.12)",
+                "rgba(34,197,94,0.25)",
+                "rgba(34,197,94,0.40)",
+                "rgba(21,128,61,0.60)",
+                "rgba(21,128,61,0.78)",
+            ]
+            _rows_html = ""
+            for _i, _t in enumerate(_payout_tiers):
+                _bg = _row_bg[min(_i, len(_row_bg) - 1)]
+                _is_current = (_i == _current_idx)
+                _border = "3px solid #fbbf24" if _is_current else "1px solid rgba(128,128,128,0.25)"
+                _star = "⭐ " if _is_current else ""
+                _rows_html += (
+                    f"<tr style='background:{_bg};'>"
+                    f"<td style='padding:8px 12px;font-weight:700;border:{_border};'>{_star}{_t['tier']}</td>"
+                    f"<td style='padding:8px 12px;text-align:center;border:{_border};'>{_t['points']}</td>"
+                    f"<td style='padding:8px 12px;text-align:center;font-weight:800;border:{_border};'>${_t['pay']:.2f}</td>"
+                    f"<td style='padding:8px 12px;font-size:12px;opacity:0.75;border:{_border};'>{_t['note']}</td>"
+                    f"</tr>"
+                )
+
+            st.markdown("### 💵 Payout Levels for Total Points")
+            st.markdown(
+                "<table style='width:100%;border-collapse:collapse;margin-bottom:8px;'>"
+                "<thead><tr style='background:rgba(128,128,128,0.25);'>"
+                "<th style='padding:10px 12px;text-align:left;border:1px solid rgba(128,128,128,0.25);'>Tier</th>"
+                "<th style='padding:10px 12px;text-align:center;border:1px solid rgba(128,128,128,0.25);'>Total Points</th>"
+                "<th style='padding:10px 12px;text-align:center;border:1px solid rgba(128,128,128,0.25);'>Pay Per Hour</th>"
+                "<th style='padding:10px 12px;text-align:left;border:1px solid rgba(128,128,128,0.25);'></th>"
+                f"</tr></thead><tbody>{_rows_html}</tbody></table>",
+                unsafe_allow_html=True,
+            )
+
+            if _current_idx >= 0:
+                _ct = _payout_tiers[_current_idx]
+                _next_idx = _current_idx + 1
+                if _next_idx < len(_payout_tiers):
+                    _nx      = _payout_tiers[_next_idx]
+                    _gap_pts = _nx["points"] - _bonus_total_pts
+                    st.caption(
+                        f"⭐ You're at **{_ct['tier']}** (${_ct['pay']:.2f}/hr). "
+                        f"Just **{_gap_pts} more point{'s' if _gap_pts != 1 else ''}** "
+                        f"to reach **{_nx['tier']}** at ${_nx['pay']:.2f}/hr."
+                    )
+                else:
+                    st.caption(f"⭐ Top tier — **{_ct['tier']}** at ${_ct['pay']:.2f}/hr! 🔥")
+            st.markdown("<br>", unsafe_allow_html=True)
 
         # ✅ Bonus Qualifier Status — all 3 base thresholds must be met to earn any bonus
         st.markdown("### 🎯 Bonus Qualifier Status")
