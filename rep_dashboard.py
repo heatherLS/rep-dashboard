@@ -1209,8 +1209,14 @@ def load_teams_new_names(_cache_bust_key: str) -> dict:
     except Exception:
         return {}
 
+@st.cache_data(show_spinner=False, ttl=600)
 def _fetch_qa_data_fresh() -> tuple:
-    """Fetch QA data via Sheets API JSON endpoint with explicit per-call timeouts."""
+    """Fetch QA data via Sheets API JSON endpoint with explicit per-call timeouts.
+
+    Decorated with @st.cache_data so all users sharing the same Streamlit Cloud
+    container reuse the same result for 10 minutes — prevents 429 rate-limit
+    errors from Google's per-project quota when many team leads load the
+    dashboard concurrently."""
     import requests as _req
     from google.oauth2.service_account import Credentials as SACredentials
     from google.auth.transport.requests import Request as GARequest
