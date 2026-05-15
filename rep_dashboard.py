@@ -2651,11 +2651,6 @@ if page == "💰Bonus & History":
 
         _bonus_total_pts = sum(points.values())
 
-        st.markdown(f"**Total Points: {_bonus_total_pts}** *(Conv: {points['Conversion']} + Attach: {points['All-In Attach']} + QA: {points['QA']})*")
-        st.markdown("<br>", unsafe_allow_html=True)
-        for k in metrics:
-            st.markdown(f"**{k}**: {metrics[k]:.2f}% — Points: `{points[k]}`")
-
         st.subheader("🌱 Focus Patch")
         focus = min(points, key=points.get)
         st.info(f"Your area of growth: **{focus}** — currently {metrics[focus]:.2f}%")
@@ -2774,13 +2769,15 @@ if page == "💰Bonus & History":
         not_met_list = [k for k, (val, base, _) in qualifiers.items()
                         if val <  base and not (k == 'QA' and not _qa_has_obs)]
 
-        # Visual qualifier checklist
+        # Visual qualifier checklist — each card now includes points earned for that metric.
         q_cols = st.columns(3)
         labels = ['Conversion', 'All-In Attach', 'QA']
         for i, k in enumerate(labels):
             val, base, need_str = qualifiers[k]
             met = val >= base
             gap = base - val
+            _pts_k = points.get(k, 0)
+            _pts_label = f"🌟 {_pts_k} pt{'s' if _pts_k != 1 else ''} earned"
             with q_cols[i]:
                 if k == 'QA' and not _qa_has_obs:
                     # Pending state — neutral indigo card, encouraging copy
@@ -2790,6 +2787,7 @@ if page == "💰Bonus & History":
                         f"<div style='font-size:24px;'>⏳</div>"
                         f"<div style='font-weight:800;'>{k}</div>"
                         f"<div style='font-size:13px;color:#6366f1;'>Awaiting first observation — keep crushing those calls!</div>"
+                        f"<div style='font-size:12px;color:#6366f1;margin-top:4px;opacity:0.85;'>0 pts (pending)</div>"
                         f"</div>",
                         unsafe_allow_html=True
                     )
@@ -2800,6 +2798,7 @@ if page == "💰Bonus & History":
                         f"<div style='font-size:24px;'>✅</div>"
                         f"<div style='font-weight:800;'>{k}</div>"
                         f"<div style='font-size:13px;color:#22c55e;'>{val:.1f}% — Base met!</div>"
+                        f"<div style='font-size:12px;color:#22c55e;margin-top:4px;font-weight:700;'>{_pts_label}</div>"
                         f"</div>",
                         unsafe_allow_html=True
                     )
@@ -2810,6 +2809,7 @@ if page == "💰Bonus & History":
                         f"<div style='font-size:24px;'>❌</div>"
                         f"<div style='font-weight:800;'>{k}</div>"
                         f"<div style='font-size:13px;color:#ef4444;'>{val:.1f}% — Need {need_str} ({gap:.1f}% away)</div>"
+                        f"<div style='font-size:12px;color:#ef4444;margin-top:4px;opacity:0.85;'>{_pts_label}</div>"
                         f"</div>",
                         unsafe_allow_html=True
                     )
