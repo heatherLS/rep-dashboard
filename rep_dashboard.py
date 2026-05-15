@@ -2655,6 +2655,72 @@ if page == "💰Bonus & History":
 
         _bonus_total_pts = sum(points.values())
 
+        # ── 🌾 Bonus Goal Cheat Sheet — quick reference at top so reps know what they need to hit
+        st.markdown("### 🌾 Bonus Goal Cheat Sheet")
+        st.caption("How each metric translates to points. Hit **base** on all 3 to qualify for any bonus.")
+
+        _CHEAT_TIER_LABELS = {
+            0: "Base",
+            1: "Green",
+            2: "Super Green",
+            3: "Super Duper",
+            4: "Super D-Duper",
+            5: "Steve Green",
+        }
+
+        def _current_tier_pts(value, tiers):
+            """Return the points the rep currently earns for this metric. None if no value."""
+            if value is None:
+                return None
+            for _thr, _pts in tiers:
+                if value >= _thr:
+                    return _pts
+            return 0
+
+        # QA only highlights when the rep has at least one observation — otherwise pending
+        _cheat_data = [
+            ("Conversion",    conversion_tiers, metrics.get('Conversion')),
+            ("All-In Attach", attach_tiers,     metrics.get('All-In Attach')),
+            ("QA",            qa_tiers,         metrics.get('QA') if _qa_has_obs else None),
+        ]
+
+        _cheat_cols = st.columns(3)
+        for _idx, (_mname, _mtiers, _mval) in enumerate(_cheat_data):
+            with _cheat_cols[_idx]:
+                _curr_pts = _current_tier_pts(_mval, _mtiers)
+                _sorted   = sorted(_mtiers, key=lambda x: -x[0])  # highest threshold first
+                _rows_html = ""
+                for _thr, _pts in _sorted:
+                    _label   = _CHEAT_TIER_LABELS.get(_pts, f"Tier {_pts}")
+                    _is_curr = (_curr_pts == _pts)
+                    _bg      = f"rgba(34,197,94,{min(0.10 + _pts * 0.10, 0.65):.2f})"
+                    _star    = "⭐ " if _is_curr else ""
+                    _weight  = "800" if _is_curr else "500"
+                    _border  = "2px solid #fbbf24" if _is_curr else "1px solid rgba(128,128,128,0.18)"
+                    _pts_lbl = f"{_pts} pt{'s' if _pts != 1 else ''}"
+                    _rows_html += (
+                        f"<tr style='background:{_bg};'>"
+                        f"<td style='padding:6px 10px;border:{_border};font-weight:{_weight};font-size:13px;'>{_star}{_label}</td>"
+                        f"<td style='padding:6px 10px;border:{_border};text-align:center;font-weight:{_weight};font-size:13px;'>{_thr:g}%</td>"
+                        f"<td style='padding:6px 10px;border:{_border};text-align:center;font-weight:{_weight};font-size:13px;'>{_pts_lbl}</td>"
+                        f"</tr>"
+                    )
+                _header_extra = (
+                    f"<div style='text-align:center;font-size:12px;opacity:0.75;margin-bottom:6px;'>You: <b>{_mval:.1f}%</b></div>"
+                    if _mval is not None else
+                    "<div style='text-align:center;font-size:12px;opacity:0.6;margin-bottom:6px;'>You: <i>pending</i></div>"
+                )
+                st.markdown(
+                    f"<div style='border:1px solid rgba(128,128,128,0.3); border-radius:12px; padding:12px; margin-bottom:8px;'>"
+                    f"<div style='font-weight:900; font-size:16px; text-align:center; margin-bottom:4px;'>{_mname}</div>"
+                    f"{_header_extra}"
+                    f"<table style='width:100%; border-collapse:collapse;'>{_rows_html}</table>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
         st.subheader("🌱 Focus Patch")
         focus = min(points, key=points.get)
         st.info(f"Your area of growth: **{focus}** — currently {metrics[focus]:.2f}%")
@@ -3029,47 +3095,6 @@ if page == "💰Bonus & History":
     {challenge_line('Mosquito', pb_mosquito, '🦟')}
     </div>
     """, unsafe_allow_html=True)
-
-    # --------------- Dynamic Bonus Tiers table (from Sheet) ---------------
-    st.markdown("### 🌾 Bonus Tiers")
-
-    TIER_LABELS = {
-        0: "Base",
-        1: "Green",
-        2: "Super Green",
-        3: "Super Duper",
-        4: "Super D-Duper",
-        5: "Steve Green",
-    }
-
-    def fmt_pct(x: float) -> str:
-        s = f"{x:.2f}".rstrip("0").rstrip(".")
-        return f"{s}%"
-
-    tiers_by_metric = {
-        "Conversion": conversion_tiers,
-        "All-In Attach": attach_tiers,
-        "QA": qa_tiers,
-    }
-
-    # union of point levels present across all metrics
-    used_points = sorted(set(p for tiers in tiers_by_metric.values() for _, p in tiers))
-    columns = ["Metric"] + [TIER_LABELS.get(p, f"Tier {p}") for p in used_points]
-
-    rows = []
-    for metric, tiers in tiers_by_metric.items():
-        # map point -> threshold (pick the threshold associated with that point)
-        by_points = {}
-        for thr, pts in tiers:
-            # keep the threshold for this points bucket (higher threshold usually later in list; any is fine)
-            by_points[pts] = thr
-        row = [metric]
-        for pts in used_points:
-            row.append(f"{fmt_pct(by_points[pts])} ({pts})" if pts in by_points else "—")
-        rows.append(row)
-
-    tiers_df = pd.DataFrame(rows, columns=columns)
-    st.dataframe(tiers_df, use_container_width=True, hide_index=True)
 
     # ── 📈 Monthly Trends — Conversion / Attach / LT / QA ────────────────────
     st.markdown("---")
