@@ -3058,9 +3058,9 @@ if page == "💰Bonus & History":
     tiers_df = pd.DataFrame(rows, columns=columns)
     st.dataframe(tiers_df, use_container_width=True, hide_index=True)
 
-    # ── 📈 Monthly Trends — Conversion / Attach / LT ─────────────────────────
+    # ── 📈 Monthly Trends — Conversion / Attach / LT / QA ────────────────────
     st.markdown("---")
-    st.subheader("📈 Monthly Trends — Conversion, Attach & LT")
+    st.subheader("📈 Monthly Trends — Conversion, Attach, LT & QA")
 
     _trend_hist = rep_history.copy()
     _trend_hist['Date'] = pd.to_datetime(
@@ -3080,6 +3080,29 @@ if page == "💰Bonus & History":
     _trend_hist['_month'] = _trend_hist['Date'].dt.to_period('M')
     _trend_avail = sorted(_trend_hist['_month'].dropna().unique(), reverse=True)
 
+    # ── QA observations trend — parallel to _trend_hist but keyed by Scoring Week.
+    # Look up the rep's canonical name (the same Teams_New lookup used elsewhere)
+    # so observations filed under either spelling get included.
+    _trend_qa = pd.DataFrame()
+    _t_qa_score_col = None
+    try:
+        _qa_raw_tr, _ = load_qa_data(cache_bust_key)
+        if not _qa_raw_tr.empty:
+            _r_roster = roster_auth[roster_auth['rep_key'] == email]
+            if not _r_roster.empty:
+                _r_first = str(_r_roster['First_Name'].values[0]).strip()
+                _r_last  = str(_r_roster['Last_Name'].values[0]).strip()
+                _r_full  = f"{_r_first} {_r_last}".strip()
+                _r_canon = load_teams_new_names(cache_bust_key).get(_r_full.lower(), _r_full)
+                _trend_qa = _qa_raw_tr[
+                    _qa_raw_tr['Agent'].astype(str).str.strip().str.lower() == _r_canon.strip().lower()
+                ].copy()
+                if not _trend_qa.empty and '_scoring_week' in _trend_qa.columns:
+                    _trend_qa['_month'] = _trend_qa['_scoring_week'].dt.to_period('M')
+                    _t_qa_score_col = 'New Score' if 'New Score' in _trend_qa.columns else 'Score'
+    except Exception:
+        _trend_qa = pd.DataFrame()
+
     def _t_conv(df):
         c = df['Calls'].sum()
         w = df['Wins'].sum()
@@ -3094,6 +3117,19 @@ if page == "💰Bonus & History":
         w = df['Wins'].sum()
         lt = df['Lawn Treatment'].sum() if 'Lawn Treatment' in df.columns else 0
         return (lt / w * 100) if w > 0 else None
+
+    def _t_qa_for_period(period, half=None):
+        """Average QA score for the given month period, optionally half-month-filtered.
+        half: None (whole month), 1 (1st-15th), 2 (16th-end). Uses _scoring_week as the date."""
+        if _trend_qa.empty or _t_qa_score_col is None:
+            return None
+        _sub = _trend_qa[_trend_qa['_month'] == period]
+        if half == 1:
+            _sub = _sub[_sub['_scoring_week'].dt.day <= 15]
+        elif half == 2:
+            _sub = _sub[_sub['_scoring_week'].dt.day > 15]
+        _vals = pd.to_numeric(_sub[_t_qa_score_col], errors='coerce').dropna()
+        return float(_vals.mean()) if len(_vals) > 0 else None
 
     def _tf(v):
         return f"{v:.1f}%" if v is not None else "—"
@@ -3129,8 +3165,16 @@ if page == "💰Bonus & History":
         _lc2.metric("1st–15th Avg", _tf(_t_lt(_tmh1)), help="PIP EOR first-half period")
         _lc3.metric("16th–End Avg", _tf(_t_lt(_tmh2)), help="PIP EOR second-half period")
 
+        st.markdown("**📋 QA Average**")
+        _qac1, _qac2, _qac3 = st.columns(3)
+        _qac1.metric("Monthly Avg",  _tf(_t_qa_for_period(_trend_period)))
+        _qac2.metric("1st–15th Avg", _tf(_t_qa_for_period(_trend_period, half=1)), help="Scoring Week falls on the 1st-15th")
+        _qac3.metric("16th–End Avg", _tf(_t_qa_for_period(_trend_period, half=2)), help="Scoring Week falls on the 16th-end")
+        if _trend_qa.empty:
+            st.caption("_No QA observations recorded yet — these will populate once your first eval is graded._")
+
         # ── 3-month breakdown ─────────────────────────────────────────────────
-        st.subheader("📊 Conversion, Attach & LT Breakdown — Last 3 Months")
+        st.subheader("📊 Conversion, Attach, LT & QA Breakdown — Last 3 Months")
         _t3_rows = []
         for _tp in sorted(_trend_avail, reverse=True)[:3]:
             _td = _trend_hist[_trend_hist['_month'] == _tp]
@@ -3147,6 +3191,9 @@ if page == "💰Bonus & History":
                 "LT 1st–15th":     _tf(_t_lt(_tdh1)),
                 "LT 16th–End":     _tf(_t_lt(_tdh2)),
                 "LT Monthly":      _tf(_t_lt(_td)),
+                "QA 1st–15th":     _tf(_t_qa_for_period(_tp, half=1)),
+                "QA 16th–End":     _tf(_t_qa_for_period(_tp, half=2)),
+                "QA Monthly":      _tf(_t_qa_for_period(_tp)),
             })
         st.dataframe(pd.DataFrame(_t3_rows), use_container_width=True, hide_index=True)
 
