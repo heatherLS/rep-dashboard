@@ -2636,9 +2636,13 @@ if page == "💰Bonus & History":
         _cy_attach = int(sum(_cy_rep[c].sum() for c in _cy_att_svc))
         _cy_attach_pct = (_cy_attach / _cy_wins * 100) if _cy_wins > 0 else 0.0
         _cy_lt = int(pd.to_numeric(_cy_rep['Lawn Treatment'], errors='coerce').fillna(0).sum()) if 'Lawn Treatment' in _cy_rep.columns else 0
+        # Live cycle-to-date conversion. Falls back to the spreadsheet's BonusConversion column
+        # if we have no live history yet (e.g., first hour of a new cycle before history pulls).
+        _cy_conv_live = (_cy_wins / _cy_calls * 100) if _cy_calls > 0 else None
+        _cy_conv_pct  = _cy_conv_live if _cy_conv_live is not None else percent(row.get('BonusConversion', 0))
 
         metrics = {
-            'Conversion': percent(row.get('BonusConversion', 0)),
+            'Conversion': _cy_conv_pct,
             'All-In Attach': _cy_attach_pct,
             'QA': _bonus_qa_val,
         }
