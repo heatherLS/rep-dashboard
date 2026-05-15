@@ -2635,6 +2635,7 @@ if page == "💰Bonus & History":
                        if c in _cy_rep.columns]
         _cy_attach = int(sum(_cy_rep[c].sum() for c in _cy_att_svc))
         _cy_attach_pct = (_cy_attach / _cy_wins * 100) if _cy_wins > 0 else 0.0
+        _cy_lt = int(pd.to_numeric(_cy_rep['Lawn Treatment'], errors='coerce').fillna(0).sum()) if 'Lawn Treatment' in _cy_rep.columns else 0
 
         metrics = {
             'Conversion': percent(row.get('BonusConversion', 0)),
@@ -2650,11 +2651,6 @@ if page == "💰Bonus & History":
 
         _bonus_total_pts = sum(points.values())
 
-        st.subheader(f"🧑‍🌾 Growth Stats for {row.get('First_Name', viewed_first)}")
-        _cnt1, _cnt2, _cnt3 = st.columns(3)
-        _cnt1.metric("Calls (cycle)", f"{_cy_calls:,}")
-        _cnt2.metric("Wins (cycle)",  f"{_cy_wins:,}")
-        _cnt3.metric("All-In Attaches (cycle)", f"{_cy_attach:,}")
         st.markdown(f"**Total Points: {_bonus_total_pts}** *(Conv: {points['Conversion']} + Attach: {points['All-In Attach']} + QA: {points['QA']})*")
         st.markdown("<br>", unsafe_allow_html=True)
         for k in metrics:
@@ -2729,6 +2725,19 @@ if page == "💰Bonus & History":
                 else:
                     st.caption(f"⭐ Top tier — **{_ct['tier']}** at ${_ct['pay']:.2f}/hr! 🔥")
             st.markdown("<br>", unsafe_allow_html=True)
+
+        # Current cycle volume — mirrors the Last Cycle Recap tile layout so reps
+        # can compare side-by-side at a glance (volume context for the qualifier section below).
+        _cy_dates_str = (
+            f"{_bcy_s.strftime('%b %-d')} – {_bcy_e.strftime('%b %-d')}"
+            if _bcy_s and _bcy_e else "Current Cycle"
+        )
+        st.subheader(f"📅 Current Cycle Stats  ·  {_cy_dates_str}")
+        _cv1, _cv2, _cv3, _cv4 = st.columns(4)
+        _cv1.metric("Calls",           f"{int(_cy_calls):,}")
+        _cv2.metric("Wins",            f"{int(_cy_wins):,}")
+        _cv3.metric("Attaches",        f"{int(_cy_attach):,}")
+        _cv4.metric("Lawn Treatments", f"{int(_cy_lt):,}")
 
         # ✅ Bonus Qualifier Status — all 3 base thresholds must be met to earn any bonus
         st.markdown("### 🎯 Bonus Qualifier Status")
