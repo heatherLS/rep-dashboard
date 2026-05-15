@@ -3058,9 +3058,9 @@ if page == "💰Bonus & History":
     tiers_df = pd.DataFrame(rows, columns=columns)
     st.dataframe(tiers_df, use_container_width=True, hide_index=True)
 
-    # ── 📈 Monthly Trends — Conversion & Attach ──────────────────────────────
+    # ── 📈 Monthly Trends — Conversion / Attach / LT ─────────────────────────
     st.markdown("---")
-    st.subheader("📈 Monthly Trends — Conversion & Attach")
+    st.subheader("📈 Monthly Trends — Conversion, Attach & LT")
 
     _trend_hist = rep_history.copy()
     _trend_hist['Date'] = pd.to_datetime(
@@ -3090,6 +3090,11 @@ if page == "💰Bonus & History":
         a = sum(df[s].sum() for s in _t_attach_cols)
         return (a / w * 100) if w > 0 else None
 
+    def _t_lt(df):
+        w = df['Wins'].sum()
+        lt = df['Lawn Treatment'].sum() if 'Lawn Treatment' in df.columns else 0
+        return (lt / w * 100) if w > 0 else None
+
     def _tf(v):
         return f"{v:.1f}%" if v is not None else "—"
 
@@ -3118,8 +3123,14 @@ if page == "💰Bonus & History":
         _ac2.metric("1st–15th Avg", _tf(_t_attach(_tmh1)), help="PIP EOR first-half period")
         _ac3.metric("16th–End Avg", _tf(_t_attach(_tmh2)), help="PIP EOR second-half period")
 
+        st.markdown("**🌿 Lawn Treatment Attach**")
+        _lc1, _lc2, _lc3 = st.columns(3)
+        _lc1.metric("Monthly Avg",  _tf(_t_lt(_tmd)))
+        _lc2.metric("1st–15th Avg", _tf(_t_lt(_tmh1)), help="PIP EOR first-half period")
+        _lc3.metric("16th–End Avg", _tf(_t_lt(_tmh2)), help="PIP EOR second-half period")
+
         # ── 3-month breakdown ─────────────────────────────────────────────────
-        st.subheader("📊 Conversion & Attach Breakdown — Last 3 Months")
+        st.subheader("📊 Conversion, Attach & LT Breakdown — Last 3 Months")
         _t3_rows = []
         for _tp in sorted(_trend_avail, reverse=True)[:3]:
             _td = _trend_hist[_trend_hist['_month'] == _tp]
@@ -3133,6 +3144,9 @@ if page == "💰Bonus & History":
                 "Attach 1st–15th": _tf(_t_attach(_tdh1)),
                 "Attach 16th–End": _tf(_t_attach(_tdh2)),
                 "Attach Monthly":  _tf(_t_attach(_td)),
+                "LT 1st–15th":     _tf(_t_lt(_tdh1)),
+                "LT 16th–End":     _tf(_t_lt(_tdh2)),
+                "LT Monthly":      _tf(_t_lt(_td)),
             })
         st.dataframe(pd.DataFrame(_t3_rows), use_container_width=True, hide_index=True)
 
