@@ -6,13 +6,17 @@ Pulls daily per-rep metrics from Redshift and writes to data/rep_history.csv.
 
 Metrics pulled:
   - Wins               → bi_lawnstarter_production.orders (closing_user_id, same-day)
-  - Lawn Treatment     → dw_silver.fct_schedules (closing_user_id, rep-filtered, same-day)
-  - Mosquito           → dw_silver.fct_schedules (closing_user_id, rep-filtered, same-day)
-  - Bush Trimming      → bi_lawnstarter_production.instant_quotes (creating_user_id, rep-filtered, same-day)
-  - Flower Bed Weeding → bi_lawnstarter_production.instant_quotes (creating_user_id, rep-filtered, same-day)
-  - Leaf Removal       → bi_lawnstarter_production.instant_quotes (creating_user_id, rep-filtered, same-day)
+  - Lawn Treatment     → dw_gold.fct_instant_quotes_agent_agg (rep-added attaches only)
+  - Mosquito           → dw_gold.fct_instant_quotes_agent_agg
+  - Bush Trimming      → dw_gold.fct_instant_quotes_agent_agg
+  - Flower Bed Weeding → dw_gold.fct_instant_quotes_agent_agg
+  - Leaf Removal       → dw_gold.fct_instant_quotes_agent_agg
   - Pool               → five9.five_9_call_logs_v_3 (same-day if Five9 syncs intraday)
   - Calls              → five9.five_9_call_logs_v_3 (T+1 only)
+
+Attach source change (2026-05): switched from direct order_services/instant_quotes
+joins to the dw_gold aggregate. Matches Tableau "Attach Leaderboard - Gold" exactly —
+excludes customer self-adds and unsold standalone quotes.
 
 Prerequisites:
   - Teleport proxy running on port 55756:
@@ -88,50 +92,33 @@ WHERE u.is_admin = 1
 GROUP BY 1, 2, 3, 4
 """
 
-# LT + Mosquito: query production tables directly (real-time Fivetran).
-# Chain: order_services -> prices (for service_id) -> services (for name) -> orders -> users
-# This bypasses dw_silver.fct_schedules which is a batch dbt table.
-SCHEDULE_ATTACHES_SQL = """
+# All 5 attaches from the dw_gold layer — same source Tableau's "Attach Leaderboard - Gold"
+# uses. The gold model keys on closing_user_id, filters attach_type != 'initial_service',
+# and de-dups by order_id — so it counts ONLY rep-added attaches that resulted in a sale,
+# excluding both (a) customer self-adds after signup, and (b) standalone quotes that never
+# converted.
+#
+# Replaces the previous SCHEDULE_ATTACHES_SQL (over-counted via closing_user_id join on
+# order_services) and IQ_ATTACHES_SQL (counted unsold standalone instant quotes).
+# Wins / Calls / Conversion / Pool are unchanged — WINS_SQL still pulls from orders table.
+ATTACHES_SQL = """
 SELECT
-    CAST(CONVERT_TIMEZONE('UTC', 'America/Chicago', os.created_at) AS DATE) AS date,
-    u.email                             AS rep,
-    SUM(CASE WHEN svc.name ILIKE '%Lawn Treatment%' THEN 1 ELSE 0 END) AS lawn_treatment,
-    SUM(CASE WHEN svc.name ILIKE '%Mosquito%'       THEN 1 ELSE 0 END) AS mosquito
-FROM bi_lawnstarter_production.order_services os
-JOIN bi_lawnstarter_production.prices         prc ON prc.id  = os.price_id
-JOIN bi_lawnstarter_production.services       svc ON svc.id  = prc.service_id
-JOIN bi_lawnstarter_production.orders         o   ON o.id    = os.order_id
-JOIN bi_lawnstarter_production.users          u   ON u.id    = o.closing_user_id
-WHERE u.is_admin = 1
-  AND u.email ILIKE '%@lawnstarter.com%'
-  AND os.deleted_at IS NULL
-  AND (svc.name ILIKE '%Lawn Treatment%' OR svc.name ILIKE '%Mosquito%')
+    customer_created_at_day                     AS date,
+    LOWER(TRIM(lawnstarter_email))              AS rep,
+    SUM(distinct_lawn_treatment_attaches)       AS lawn_treatment,
+    SUM(distinct_mosquito_attaches)             AS mosquito,
+    SUM(distinct_bush_trimming_attaches)        AS bush_trimming,
+    SUM(distinct_flower_bed_weeding_attaches)   AS flower_bed_weeding,
+    SUM(distinct_leaf_removal_attaches)         AS leaf_removal
+FROM dw_gold.fct_instant_quotes_agent_agg
+WHERE lawnstarter_email IS NOT NULL
   {date_filter}
 GROUP BY 1, 2
-HAVING SUM(CASE WHEN svc.name ILIKE '%Lawn Treatment%' THEN 1 ELSE 0 END) > 0
-    OR SUM(CASE WHEN svc.name ILIKE '%Mosquito%'        THEN 1 ELSE 0 END) > 0
-"""
-
-# Bush Trimming / Flower Bed Weeding / Leaf Removal: from instant_quotes with creating_user_id
-# (rep directly created the IQ — excludes customer self-adds by design)
-IQ_ATTACHES_SQL = """
-SELECT
-    CAST(CONVERT_TIMEZONE('UTC', 'America/Chicago', iq.created_at) AS DATE) AS date,
-    u.email                             AS rep,
-    SUM(CASE WHEN iq.instant_quotable_type = 'App\\\\InstantQuoteBushTrimming'     THEN 1 ELSE 0 END) AS bush_trimming,
-    SUM(CASE WHEN iq.instant_quotable_type = 'App\\\\InstantQuoteFlowerBedWeeding' THEN 1 ELSE 0 END) AS flower_bed_weeding,
-    SUM(CASE WHEN iq.instant_quotable_type = 'App\\\\InstantQuoteLeafRemoval'      THEN 1 ELSE 0 END) AS leaf_removal
-FROM bi_lawnstarter_production.instant_quotes iq
-JOIN bi_lawnstarter_production.users          u ON iq.creating_user_id = u.id
-WHERE iq.instant_quote_status IN ('completed', 'contractor.accepted', 'contractor.pending')
-  AND iq._fivetran_deleted = false
-  AND u.is_admin = 1
-  AND u.email ILIKE '%@lawnstarter.com%'
-  {date_filter}
-GROUP BY 1, 2
-HAVING SUM(CASE WHEN iq.instant_quotable_type = 'App\\\\InstantQuoteBushTrimming'     THEN 1 ELSE 0 END) > 0
-    OR SUM(CASE WHEN iq.instant_quotable_type = 'App\\\\InstantQuoteFlowerBedWeeding' THEN 1 ELSE 0 END) > 0
-    OR SUM(CASE WHEN iq.instant_quotable_type = 'App\\\\InstantQuoteLeafRemoval'      THEN 1 ELSE 0 END) > 0
+HAVING SUM(distinct_lawn_treatment_attaches
+         + distinct_mosquito_attaches
+         + distinct_bush_trimming_attaches
+         + distinct_flower_bed_weeding_attaches
+         + distinct_leaf_removal_attaches) > 0
 """
 
 POOL_SQL = """
@@ -494,17 +481,11 @@ def sync(today_only: bool = False, backfill_date=None):
     wins_sql = WINS_SQL.format(date_filter=date_filter_clause(start, end, col="CAST(CONVERT_TIMEZONE('UTC', 'America/Chicago', o.created_at) AS DATE)"))
     wins_df = run_query(conn, wins_sql)
 
-    # --- LT + Mosquito (schedule-based, intraday) ---
-    print("  Fetching LT + Mosquito attaches (fct_schedules)...")
-    sched_col = "CAST(CONVERT_TIMEZONE('UTC', 'America/Chicago', os.created_at) AS DATE)"
-    sched_sql = SCHEDULE_ATTACHES_SQL.format(date_filter=date_filter_clause(start, end, col=sched_col))
-    sched_df = run_query(conn, sched_sql)
-
-    # --- Bush / Flower Bed / Leaf Removal (instant_quotes, intraday) ---
-    print("  Fetching Bush / Flower Bed / Leaf attaches (instant_quotes)...")
-    iq_col = "CAST(CONVERT_TIMEZONE('UTC', 'America/Chicago', iq.created_at) AS DATE)"
-    iq_sql = IQ_ATTACHES_SQL.format(date_filter=date_filter_clause(start, end, col=iq_col))
-    iq_df = run_query(conn, iq_sql)
+    # --- All 5 attaches (LT, Mosquito, BT, FB, LR) from dw_gold.fct_instant_quotes_agent_agg ---
+    # Same source as Tableau's "Attach Leaderboard - Gold" — rep-added attaches only.
+    print("  Fetching all attaches (dw_gold.fct_instant_quotes_agent_agg)...")
+    attach_sql = ATTACHES_SQL.format(date_filter=date_filter_clause(start, end, col="customer_created_at_day"))
+    attach_df = run_query(conn, attach_sql)
 
     # --- Pool (Five9) ---
     print("  Fetching Pool (Five9)...")
@@ -604,7 +585,7 @@ def sync(today_only: bool = False, backfill_date=None):
     print("  Merging datasets...")
 
     # Normalize email to lowercase
-    for df in [wins_df, sched_df, iq_df, pool_df, calls_df]:
+    for df in [wins_df, attach_df, pool_df, calls_df]:
         if 'rep' in df.columns:
             df['rep'] = df['rep'].str.lower().str.strip()
 
@@ -613,12 +594,10 @@ def sync(today_only: bool = False, backfill_date=None):
         'date': 'Date', 'rep': 'Rep',
         'first_name': 'First_Name', 'last_name': 'Last_Name', 'wins': 'Wins',
     })
-    sched_df = sched_df.rename(columns={
+    attach_df = attach_df.rename(columns={
         'date': 'Date', 'rep': 'Rep',
-        'lawn_treatment': 'Lawn Treatment', 'mosquito': 'Mosquito',
-    })
-    iq_df = iq_df.rename(columns={
-        'date': 'Date', 'rep': 'Rep',
+        'lawn_treatment': 'Lawn Treatment',
+        'mosquito': 'Mosquito',
         'bush_trimming': 'Bush Trimming',
         'flower_bed_weeding': 'Flower Bed Weeding',
         'leaf_removal': 'Leaf Removal',
@@ -627,13 +606,13 @@ def sync(today_only: bool = False, backfill_date=None):
     calls_df = calls_df.rename(columns={'date': 'Date', 'rep': 'Rep', 'calls': 'Calls'})
 
     # Normalize all Date columns to datetime64 so merges don't fail on type mismatch
-    for df in [wins_df, sched_df, iq_df, pool_df, calls_df]:
+    for df in [wins_df, attach_df, pool_df, calls_df]:
         if 'Date' in df.columns:
             df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
 
     # Build spine as union of all rep/date combos across all sources
     spine_parts = []
-    for df in [wins_df, sched_df, iq_df, pool_df, calls_df]:
+    for df in [wins_df, attach_df, pool_df, calls_df]:
         if not df.empty:
             spine_parts.append(df[['Date', 'Rep']].drop_duplicates())
     spine = pd.concat(spine_parts, ignore_index=True).drop_duplicates(['Date', 'Rep'])
@@ -652,8 +631,11 @@ def sync(today_only: bool = False, backfill_date=None):
 
     # Merge each metric
     merged = spine.merge(wins_df[['Date', 'Rep', 'Wins']], on=['Date', 'Rep'], how='left')
-    merged = merged.merge(sched_df[['Date', 'Rep', 'Lawn Treatment', 'Mosquito']], on=['Date', 'Rep'], how='left')
-    merged = merged.merge(iq_df[['Date', 'Rep', 'Bush Trimming', 'Flower Bed Weeding', 'Leaf Removal']], on=['Date', 'Rep'], how='left')
+    merged = merged.merge(
+        attach_df[['Date', 'Rep', 'Lawn Treatment', 'Mosquito',
+                   'Bush Trimming', 'Flower Bed Weeding', 'Leaf Removal']],
+        on=['Date', 'Rep'], how='left',
+    )
     merged = merged.merge(pool_df[['Date', 'Rep', 'Pool']], on=['Date', 'Rep'], how='left')
     merged = merged.merge(calls_df[['Date', 'Rep', 'Calls']], on=['Date', 'Rep'], how='left')
 
